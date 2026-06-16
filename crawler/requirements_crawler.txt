@@ -1,0 +1,6 @@
+# Dependências adicionais do crawler (além de setup/requirements.txt)
+# Instale com: pip install -r requirements_crawler.txt
+
+requests>=2.31.0          # HTTP client com suporte a sessões e redirects
+beautifulsoup4>=4.12.0    # parser HTML
+lxml>=5.0.0               # backend rápido para BeautifulSoup

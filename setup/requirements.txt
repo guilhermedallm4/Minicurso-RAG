@@ -1,0 +1,36 @@
+# RAG Institucional — Pós-Graduação em Computação
+# Versões testadas em Ubuntu 24.04 / Python 3.12
+# Instale com: pip install -r requirements.txt
+
+# LangChain — orquestração do pipeline RAG
+langchain==1.3.2
+langchain-core==1.4.0
+langchain-community==0.4.2
+langchain-text-splitters==1.1.2
+langchain-classic==1.0.7              # EnsembleRetriever (busca híbrida)
+
+# Embeddings e LLM via API (sem GPU local)
+langchain-google-genai==4.2.4        # Google Gemini (embedding + LLM)
+langchain-nvidia-ai-endpoints==1.4.0 # NVIDIA NIM (opcional)
+
+# Banco vetorial
+SQLAlchemy==2.0.50                   # ORM usado pelo LangChain PGVector
+psycopg2-binary==2.9.12              # driver PostgreSQL
+pgvector==0.4.2                      # extensão pgvector para Python
+
+# Carregamento de documentos
+pypdf==6.12.2                        # leitura de PDFs
+
+# Utilitários
+python-dotenv==1.2.2                 # carrega variáveis do arquivo .env
+numpy==2.4.6
+
+# Busca híbrida
+rank-bm25==0.2.2                     # BM25 para busca esparsa (léxica)
+
+# Reranking
+sentence-transformers==5.5.1         # cross-encoder local (fallback do reranker)
+
+# Avaliação de geração
+bert-score==0.3.13                   # BERTScore (modelo ~270 MB no primeiro uso)
+rouge-score==0.1.2                   # ROUGE-L (sem modelo local)
