@@ -2,6 +2,8 @@
 
 Material prático do minicurso de **RAG (Retrieval-Augmented Generation)**. O projeto implementa, passo a passo, um chatbot institucional que responde perguntas sobre disciplinas, projetos, servidores, cursos e unidades da UFPel, combinando busca vetorial (PostgreSQL + pgvector), busca híbrida (BM25 + semântica), reranking, roteamento por tipo de conteúdo, guardrails e avaliação automática.
 
+![Arquitetura RAG Institucional](RAG_institucional.png)
+
 ## Sumário
 
 - [Arquitetura do projeto](#arquitetura-do-projeto)
