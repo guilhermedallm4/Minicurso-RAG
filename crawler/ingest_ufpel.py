@@ -40,6 +40,7 @@ sys.path.insert(0, str(_APP_DIR))
 import config                                    # noqa: E402 — precisa antes dos imports LangChain
 from providers import get_embeddings             # noqa: E402
 from chunking import chunk_documents             # noqa: E402
+from chunking_semantico import chunk_documents_semantic  # noqa: E402
 from langchain_community.vectorstores import PGVector   # noqa: E402
 from langchain_core.documents import Document   # noqa: E402
 
@@ -332,6 +333,7 @@ def ingest_segmented(
     batch_size: int = INGEST_BATCH_SIZE,
     delay: float = INGEST_DELAY,
     max_per_tipo: int | None = None,
+    use_semantic_chunking: bool = True,
 ) -> dict[str, int]:
     """
     Pipeline segmentada por tipo:
@@ -339,9 +341,10 @@ def ingest_segmented(
     1. Cria as tabelas físicas por tipo se não existirem (idempotente).
     2. Agrupa documentos pelo campo `tipo` dos metadados.
     3. Para cada grupo (limitado a `max_per_tipo` docs), processa em lotes:
-         a. Gera embeddings UMA vez (Google gemini-embedding-001).
-         b. Insere na tabela física da categoria (SQL direto).
-         c. Insere na coleção PGVector do LangChain (para o pipeline RAG).
+         a. Faz chunking (semântico ou recursivo)
+         b. Gera embeddings UMA vez (Google gemini-embedding-001).
+         c. Insere na tabela física da categoria (SQL direto).
+         d. Insere na coleção PGVector do LangChain (para o pipeline RAG).
 
     Mapeamento tipo → tabela / coleção:
       disciplina  → disciplinas  / ufpel_disciplinas
@@ -351,16 +354,22 @@ def ingest_segmented(
       curso       → cursos       / ufpel_cursos
       (outros)    → portal_geral / ufpel_portal_geral
 
+    Chunking Semântico:
+      Se use_semantic_chunking=True, respeita estrutura de seções (Resumo:, Objetivos:, etc.)
+      mantendo conteúdo semanticamente coerente e adicionando metadados de seção.
+      Fallback para RecursiveCharacterTextSplitter se não houver estrutura clara.
+
     Limites free tier Google (gemini-embedding-001):
       ~1 chamada/min efetiva → use --max-por-tipo 200 --delay 62
       Com 200 docs/tipo: ~2 000 chunks → ~20 lotes → ~20 min por tipo.
 
     Args:
-        documents    : LangChain Documents com metadado `tipo` preenchido
-        reset        : se True, trunca tabelas e recria coleções antes de inserir
-        batch_size   : chunks por lote de embedding (padrão INGEST_BATCH_SIZE)
-        delay        : segundos entre lotes (padrão INGEST_DELAY)
-        max_per_tipo : limite de documentos por tipo (None = sem limite)
+        documents           : LangChain Documents com metadado `tipo` preenchido
+        reset               : se True, trunca tabelas e recria coleções antes de inserir
+        batch_size          : chunks por lote de embedding (padrão INGEST_BATCH_SIZE)
+        delay               : segundos entre lotes (padrão INGEST_DELAY)
+        max_per_tipo        : limite de documentos por tipo (None = sem limite)
+        use_semantic_chunking : se True, usa chunking semântico; senão, usa recursivo
 
     Returns:
         Dict {collection_name: número_de_documentos_inseridos}
@@ -394,9 +403,13 @@ def ingest_segmented(
         print(f"  Tabela    : {table}  |  Coleção: {col}")
         print(f"  Documentos: {len(docs)}"
               + (f" (de {len(by_tipo[tipo])} total)" if max_per_tipo else ""))
+        print(f"  Chunking  : {'semântico' if use_semantic_chunking else 'recursivo'}")
         print("=" * 62)
 
-        chunks    = chunk_documents(docs)
+        chunks = (
+            chunk_documents_semantic(docs) if use_semantic_chunking
+            else chunk_documents(docs)
+        )
         total     = len(chunks)
         n_batches = max(1, (total + batch_size - 1) // batch_size)
         eta_min   = round(n_batches * delay / 60, 1)
@@ -495,6 +508,8 @@ def _build_parser() -> argparse.ArgumentParser:
                         "free tier: use 62)")
     p.add_argument("--all-in-one", action="store_true",
                    help="Insere tudo em uma única coleção (sem segmentação por tipo)")
+    p.add_argument("--chunking", choices=["semantico", "recursivo"], default="semantico",
+                   help="Estratégia de chunking (padrão: semantico)")
     return p
 
 
@@ -508,6 +523,8 @@ def main() -> None:
         print("[Aviso] Nenhum documento válido. Verifique o arquivo JSON.")
         sys.exit(1)
 
+    use_semantic = args.chunking == "semantico"
+
     if args.all_in_one:
         ingest_to_pgvector(documents, reset=args.reset)
     else:
@@ -516,6 +533,7 @@ def main() -> None:
             reset=args.reset,
             delay=args.delay,
             max_per_tipo=args.max_por_tipo,
+            use_semantic_chunking=use_semantic,
         )
 
 

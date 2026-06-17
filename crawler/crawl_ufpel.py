@@ -116,6 +116,60 @@ def _extract_title(soup: BeautifulSoup) -> str:
     return h1.get_text(strip=True) if h1 else "Sem título"
 
 
+def _extract_equipe_members(soup: BeautifulSoup) -> str:
+    """
+    Extrai membros da equipe de um projeto.
+
+    Busca por:
+      1. Seção com ID/classe contendo "equipe" ou "membros"
+      2. Tabelas com colunas de nome/papel
+      3. Listas não-ordenadas com membros
+    """
+    members = []
+
+    # Procura por seção de equipe/membros
+    equipe_section = soup.find(
+        re.compile(r"div|section"),
+        {"id": re.compile(r"equipe|membros|team", re.I)}
+    )
+    if not equipe_section:
+        equipe_section = soup.find(
+            re.compile(r"div|section"),
+            {"class": re.compile(r"equipe|membros|team", re.I)}
+        )
+
+    if equipe_section:
+        # Tenta extrair de tabelas
+        table = equipe_section.find("table")
+        if table:
+            for row in table.find_all("tr")[1:]:  # Skip header
+                cells = row.find_all(["td", "th"])
+                if len(cells) >= 2:
+                    name = cells[0].get_text(strip=True)
+                    role = cells[1].get_text(strip=True) if len(cells) > 1 else ""
+                    if name:
+                        members.append(f"{name}" + (f" ({role})" if role else ""))
+
+        # Tenta extrair de listas
+        ul = equipe_section.find("ul")
+        if ul:
+            for li in ul.find_all("li"):
+                text = li.get_text(strip=True)
+                if text:
+                    members.append(text)
+
+        # Tenta extrair de parágrafos estruturados
+        if not members:
+            for p in equipe_section.find_all("p"):
+                text = p.get_text(strip=True)
+                if text and len(text) > 10:
+                    members.append(text)
+
+    if members:
+        return "Equipe:\n" + "\n".join(f"- {m}" for m in members)
+    return ""
+
+
 def _extract_ficha_fields(soup: BeautifulSoup) -> str:
     """
     Extrai campos estruturados de páginas com o padrão ficha-label/ficha-campo
@@ -156,6 +210,11 @@ def _extract_ficha_fields(soup: BeautifulSoup) -> str:
             value = re.sub(r"\s{2,}", " ", value)
             if value:
                 lines.append(f"{label}: {value}")
+
+    # ── Extrai equipe de projetos ──────────────────────────────────────────────
+    equipe_text = _extract_equipe_members(soup)
+    if equipe_text:
+        lines.append(equipe_text)
 
     return "\n".join(lines)
 
