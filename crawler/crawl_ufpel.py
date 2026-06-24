@@ -39,8 +39,8 @@ BASE_URL          = "https://institucional.ufpel.edu.br/"
 ALLOWED_DOMAINS   = {"institucional.ufpel.edu.br"}
 
 DEFAULT_OUTPUT      = "crawled_data.json"
-DEFAULT_MAX_PAGES   = 150
-DEFAULT_DEPTH       = 3
+DEFAULT_MAX_PAGES   = None   # None = sem limite (coleta tudo no domínio)
+DEFAULT_DEPTH       = None   # None = sem limite de profundidade
 PROJECTS_URL        = "https://institucional.ufpel.edu.br/projetos"
 DISCIPLINES_URL     = "https://institucional.ufpel.edu.br/disciplinas"
 SERVIDORES_URL      = "https://institucional.ufpel.edu.br/servidores"
@@ -211,6 +211,30 @@ def _extract_ficha_fields(soup: BeautifulSoup) -> str:
             if value:
                 lines.append(f"{label}: {value}")
 
+    # ── Currículo Lattes (servidores/docentes) ────────────────────────────────
+    lattes_section = soup.find(id="lattes")
+    if lattes_section:
+        # Link para o currículo Lattes
+        lattes_link = soup.find("a", href=re.compile(r"lattes\.cnpq\.br/"))
+        if lattes_link:
+            lines.append(f"Currículo Lattes: {lattes_link['href']}")
+
+        # Seções textuais dentro de #lattes (Resumo, Formação acadêmica, Áreas de atuação)
+        for h3 in lattes_section.find_all("h3"):
+            section_label = h3.get_text(strip=True)
+            # Coleta os parágrafos que seguem este h3 até o próximo h3
+            parts = []
+            for sib in h3.next_siblings:
+                if sib.name == "h3":
+                    break
+                if sib.name == "p":
+                    text = sib.get_text(separator="\n", strip=True)
+                    text = re.sub(r" {2,}", " ", text)
+                    if text and "Informações extraídas" not in text:
+                        parts.append(text)
+            if parts:
+                lines.append(f"{section_label}: {' '.join(parts)}")
+
     # ── Extrai equipe de projetos ──────────────────────────────────────────────
     equipe_text = _extract_equipe_members(soup)
     if equipe_text:
@@ -272,7 +296,7 @@ def _extract_text(soup: BeautifulSoup) -> str:
 def get_project_urls(session: requests.Session | None = None) -> list[str]:
     """
     Busca a página de listagem de projetos e retorna todas as URLs
-    de projetos individuais (/projetos/id/XXXX) encontradas.
+    de projetos individuais (/projetos/id/pXXXX) encontradas.
     """
     sess = session or requests.Session()
     sess.headers.setdefault("User-Agent", HEADERS["User-Agent"])
@@ -282,7 +306,7 @@ def get_project_urls(session: requests.Session | None = None) -> list[str]:
     urls = set()
     for a in soup.find_all("a", href=True):
         href = a["href"].strip()
-        if "/projetos/id/" in href:
+        if "/projetos/id/p" in href:
             full = _normalize_url(urljoin(PROJECTS_URL, href))
             if _is_crawlable(full):
                 urls.add(full)
@@ -321,11 +345,11 @@ class UFPelCrawler:
 
     def __init__(
         self,
-        max_pages: int = DEFAULT_MAX_PAGES,
-        max_depth: int = DEFAULT_DEPTH,
+        max_pages: int | None = DEFAULT_MAX_PAGES,
+        max_depth: int | None = DEFAULT_DEPTH,
     ):
-        self.max_pages = max_pages
-        self.max_depth = max_depth
+        self.max_pages = max_pages  # None = sem limite
+        self.max_depth = max_depth  # None = sem limite
         self._visited: set[str] = set()
         self._pages: list[dict] = []
         self._session = requests.Session()
@@ -341,15 +365,23 @@ class UFPelCrawler:
             (_normalize_url(start_url), 0)
         ])
 
+        max_pages_label = str(self.max_pages) if self.max_pages is not None else "∞"
+        max_depth_label = str(self.max_depth) if self.max_depth is not None else "∞"
         print(f"[Crawler] URL inicial : {start_url}")
-        print(f"[Crawler] Max páginas : {self.max_pages}")
-        print(f"[Crawler] Max depth   : {self.max_depth}")
+        print(f"[Crawler] Max páginas : {max_pages_label}")
+        print(f"[Crawler] Max depth   : {max_depth_label}")
         print("-" * 60)
 
-        while queue and len(self._pages) < self.max_pages:
+        def _under_limit() -> bool:
+            return self.max_pages is None or len(self._pages) < self.max_pages
+
+        def _within_depth(d: int) -> bool:
+            return self.max_depth is None or d <= self.max_depth
+
+        while queue and _under_limit():
             url, depth = queue.popleft()
 
-            if url in self._visited or depth > self.max_depth:
+            if url in self._visited or not _within_depth(depth):
                 continue
             self._visited.add(url)
 
@@ -363,7 +395,7 @@ class UFPelCrawler:
             # Sempre enfileira links, independente do tamanho do texto.
             # Isso permite que páginas-hub (homepage, índices) alimentem
             # a fila mesmo sem conteúdo textual próprio significativo.
-            if depth < self.max_depth:
+            if self.max_depth is None or depth < self.max_depth:
                 for link in links:
                     if link not in self._visited:
                         queue.append((link, depth + 1))
@@ -379,7 +411,7 @@ class UFPelCrawler:
                     "links":      list(links),
                 })
                 count = len(self._pages)
-                print(f"  [{count:>4}/{self.max_pages}] depth={depth}  {url[:80]}")
+                print(f"  [{count:>4}/{max_pages_label}] depth={depth}  {url[:80]}")
             else:
                 print(f"  [skip] depth={depth}  {url[:80]}  ({len(text)} chars)")
 
@@ -403,7 +435,7 @@ class UFPelCrawler:
         print(f"[Projetos] Buscando URLs em {PROJECTS_URL} ...")
         project_urls = get_project_urls(self._session)
         total = len(project_urls)
-        effective_limit = min(total, limit if limit is not None else self.max_pages)
+        effective_limit = total if limit is None else min(total, limit)
         print(f"[Projetos] {total} projetos encontrados — serão coletados até {effective_limit}")
         print("-" * 60)
 
@@ -644,13 +676,13 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument("--max-pages",          type=int, default=DEFAULT_MAX_PAGES,
-                   metavar="N", help="Máximo de páginas no BFS geral")
-    p.add_argument("--projects-max",       type=int, default=500,
-                   metavar="N", help="Máximo de projetos a coletar (--projects-only)")
+                   metavar="N", help="Máximo de páginas no BFS geral (padrão: sem limite)")
+    p.add_argument("--projects-max",       type=int, default=None,
+                   metavar="N", help="Máximo de projetos a coletar (padrão: todos)")
     p.add_argument("--disciplines-max",    type=int, default=None,
                    metavar="N", help="Máximo de disciplinas a coletar (padrão: todas)")
     p.add_argument("--depth",              type=int, default=DEFAULT_DEPTH,
-                   metavar="D", help="Profundidade máxima de navegação (BFS geral)")
+                   metavar="D", help="Profundidade máxima de navegação (BFS geral; padrão: sem limite)")
     p.add_argument("--output",             default=DEFAULT_OUTPUT,
                    metavar="FILE", help="Arquivo JSON de saída")
     p.add_argument("--url",                default=BASE_URL,

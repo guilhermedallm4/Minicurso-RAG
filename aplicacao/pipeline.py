@@ -93,24 +93,206 @@ PERGUNTA DO USUÁRIO: {question}
 
 RESPOSTA:""")
 
-SYNTHESIS_PROMPT = ChatPromptTemplate.from_template("""
+_BASE_INSTRUCTION = (
+    "Responda usando EXCLUSIVAMENTE as informações dos documentos acima. "
+    "Se uma informação não estiver no contexto, omita o campo (não invente). "
+    "Ao final de cada entidade, informe a fonte no formato: "
+    "(Fonte: <título> | <URL>)"
+)
+
+_PROMPT_SERVIDOR = ChatPromptTemplate.from_template("""
 Você é um assistente especializado em documentos institucionais da UFPel.
 O usuário quer saber: {question}
 
-Palavras-chave usadas na busca: {keywords}
-
-DOCUMENTOS ENCONTRADOS (máx. 4):
+DOCUMENTOS RECUPERADOS (top {n_docs}):
 {context}
 
-Com base EXCLUSIVAMENTE nos documentos acima, faça uma síntese organizada:
-  1. Liste cada item encontrado com seu título em negrito
-  2. Inclua um breve resumo (2-3 frases) de cada um
-  3. Destaque a relação com as palavras-chave pesquisadas
-  4. Ao final, indique quantos itens foram encontrados
+{instruction}
 
-Se não houver documentos relevantes, informe claramente.
+Para CADA servidor/professor encontrado, use EXATAMENTE este formato:
 
-SÍNTESE:""")
+---
+**Informações de Servidor:**
+
+Nome: <Nome do Servidor>
+Matrícula SIAPE: <SIAPE>
+Categoria: <Docente / Técnico Administrativo>
+Cargo: <Cargo>, Classe <X> / Nível <Y>
+Lotação: <Unidade / Departamento>
+Regime / Jornada de Trabalho: <Regime> / <Jornada>
+Situação: <Situação>
+Data de ingresso na UFPel: <Data>
+
+**Atuação e Titulação:**
+Titulação: <Titulação>
+Áreas de Atuação: <Áreas separadas por " | ">
+Formação Acadêmica: <cada formação em linha separada>
+Currículo Lattes: <URL do Lattes, se disponível>
+
+**Resumo Profissional:**
+<Resumo extraído do Lattes>
+
+(Fonte: <título do documento> | <URL>)
+---
+
+RESPOSTA:""")
+
+_PROMPT_DISCIPLINA = ChatPromptTemplate.from_template("""
+Você é um assistente especializado em documentos institucionais da UFPel.
+O usuário quer saber: {question}
+
+DOCUMENTOS RECUPERADOS (top {n_docs}):
+{context}
+
+{instruction}
+
+Para CADA disciplina encontrada, use EXATAMENTE este formato:
+
+---
+**Disciplina:** <Nome da Atividade>
+
+Código: <Código> | Carga Horária: <CH> | Créditos: <N>
+Unidade Responsável: <Departamento/Instituto>
+Periodicidade: <Semestral/Anual>
+Tipo: <Obrigatória/Optativa>
+
+**Ementa:**
+<Texto da ementa>
+
+**Objetivos:**
+<Texto dos objetivos, se disponível>
+
+**Conteúdo Programático:**
+<Conteúdo, se disponível>
+
+(Fonte: <título do documento> | <URL>)
+---
+
+RESPOSTA:""")
+
+_PROMPT_PROJETO = ChatPromptTemplate.from_template("""
+Você é um assistente especializado em documentos institucionais da UFPel.
+O usuário quer saber: {question}
+
+DOCUMENTOS RECUPERADOS (top {n_docs}):
+{context}
+
+{instruction}
+
+Para CADA projeto encontrado, use EXATAMENTE este formato:
+
+---
+**Projeto:** <Nome do Projeto>
+
+Ênfase: <Pesquisa / Extensão / Ensino>
+Coordenador: <Nome do Coordenador>
+Unidade de Origem: <Unidade>
+Área CNPq: <Área>
+Eixo Temático: <Eixo Principal>
+Período: <Data inicial> a <Data final>
+
+**Resumo:**
+<Resumo do projeto>
+
+**Objetivo Geral:**
+<Objetivo, se disponível>
+
+**Equipe:**
+<Lista de membros com papel, se disponível>
+
+(Fonte: <título do documento> | <URL>)
+---
+
+RESPOSTA:""")
+
+_PROMPT_CURSO = ChatPromptTemplate.from_template("""
+Você é um assistente especializado em documentos institucionais da UFPel.
+O usuário quer saber: {question}
+
+DOCUMENTOS RECUPERADOS (top {n_docs}):
+{context}
+
+{instruction}
+
+Para CADA curso encontrado, use EXATAMENTE este formato:
+
+---
+**Curso:** <Nome do Curso>
+
+Nível: <Graduação / Pós-Graduação / Técnico>
+Turno: <Diurno / Noturno / Integral>
+Vagas: <N vagas por ano>
+Duração: <N semestres>
+Coordenação: <Nome do Coordenador>
+Unidade: <Unidade/Instituto responsável>
+
+**Informações Adicionais:**
+<Demais informações relevantes disponíveis>
+
+(Fonte: <título do documento> | <URL>)
+---
+
+RESPOSTA:""")
+
+_PROMPT_UNIDADE = ChatPromptTemplate.from_template("""
+Você é um assistente especializado em documentos institucionais da UFPel.
+O usuário quer saber: {question}
+
+DOCUMENTOS RECUPERADOS (top {n_docs}):
+{context}
+
+{instruction}
+
+Para CADA unidade encontrada, use EXATAMENTE este formato:
+
+---
+**Unidade:** <Nome da Unidade> (<SIGLA>)
+
+Código SIORG: <Código>
+Direção / Chefia: <Nome>
+Endereço / Contato: <Informações de contato, se disponíveis>
+
+**Estrutura:**
+<Subunidades ou informações organizacionais disponíveis>
+
+(Fonte: <título do documento> | <URL>)
+---
+
+RESPOSTA:""")
+
+_PROMPT_GERAL = ChatPromptTemplate.from_template("""
+Você é um assistente especializado em documentos institucionais da UFPel.
+O usuário quer saber: {question}
+
+DOCUMENTOS RECUPERADOS (top {n_docs}):
+{context}
+
+{instruction}
+
+Para cada item encontrado, apresente as informações de forma organizada com
+título em negrito, campos relevantes e ao final a fonte no formato
+(Fonte: <título> | <URL>).
+Se a pergunta for sobre uma entidade específica, responda diretamente.
+Se envolver múltiplos itens, liste cada um separadamente.
+
+RESPOSTA:""")
+
+# Mapeamento coleção → prompt
+_COLLECTION_PROMPTS: dict[str, ChatPromptTemplate] = {
+    "ufpel_servidores":  _PROMPT_SERVIDOR,
+    "ufpel_disciplinas": _PROMPT_DISCIPLINA,
+    "ufpel_projetos":    _PROMPT_PROJETO,
+    "ufpel_cursos":      _PROMPT_CURSO,
+    "ufpel_unidades":    _PROMPT_UNIDADE,
+}
+
+# mantido para compatibilidade com build_rag_chain / validate_and_answer
+SYNTHESIS_PROMPT = _PROMPT_GERAL
+
+
+def _get_prompt(collection_name: str | None) -> ChatPromptTemplate:
+    """Retorna o prompt estruturado adequado para a coleção."""
+    return _COLLECTION_PROMPTS.get(collection_name or "", _PROMPT_GERAL)
 
 
 def _format_docs(docs: List[Document], max_chars_per_doc: int = 0) -> str:
@@ -128,6 +310,55 @@ def _format_docs(docs: List[Document], max_chars_per_doc: int = 0) -> str:
             content = content[:max_chars_per_doc] + "…"
         parts.append(f"{header}\n{content}")
     return "\n\n---\n\n".join(parts)
+
+
+def _select_sources(results: List[Tuple], threshold: float = 0.85) -> List[str]:
+    """
+    Retorna apenas as URLs das fontes cujo score está dentro do threshold do melhor score.
+
+    Evita que registros duplicados de um mesmo servidor (IDs diferentes no portal,
+    mesma pessoa) apareçam todos como fontes na resposta.
+
+    threshold=0.85 → só mostra fontes com score >= 85% do score máximo.
+    """
+    if not results:
+        return []
+    scores_by_source: dict[str, float] = {}
+    for doc, score in results:
+        src = doc.metadata.get("source", "documento")
+        if src not in scores_by_source or score > scores_by_source[src]:
+            scores_by_source[src] = score
+
+    best = max(scores_by_source.values())
+    cutoff = best * threshold
+    return sorted(src for src, score in scores_by_source.items() if score >= cutoff)
+
+
+def _sources_cited_in_response(response: str, results: List[Tuple]) -> List[str]:
+    """
+    Retorna apenas as URLs dos documentos cujo título foi mencionado na resposta.
+
+    O LLM recebe a instrução de citar o título de cada documento usado. Após a
+    resposta, verificamos quais títulos aparecem no texto e devolvemos somente
+    essas fontes. Se nenhum título for encontrado (ex.: resposta negativa),
+    cai no fallback por score via _select_sources().
+    """
+    response_lower = response.lower()
+    cited: list[str] = []
+    seen_sources: set[str] = set()
+
+    for doc, _ in results:
+        titulo = doc.metadata.get("titulo", "")
+        source = doc.metadata.get("source", "")
+        if not titulo or not source or source in seen_sources:
+            continue
+        # Checa se pelo menos metade das palavras do título estão na resposta
+        words = [w for w in titulo.lower().split() if len(w) > 3]
+        if words and sum(1 for w in words if w in response_lower) >= max(1, len(words) // 2):
+            cited.append(source)
+            seen_sources.add(source)
+
+    return sorted(cited) if cited else _select_sources(results)
 
 
 # =============================================================================
@@ -250,7 +481,7 @@ def validate_and_answer(
             print(f"[Guard:saída:{out_result.check}] Bloqueado")
             return f"Resposta bloqueada pelo sistema de segurança: {out_result.reason}"
 
-    sources = sorted({d.metadata.get("source", "documento") for d in docs})
+    sources = _sources_cited_in_response(response, results)
     return f"{response}\n\n[Fontes: {', '.join(sources)}]"
 
 
@@ -281,7 +512,7 @@ def _answer_from_results(
             print(f"[Guard:saída:{out_result.check}] Bloqueado")
             return f"Resposta bloqueada pelo sistema de segurança: {out_result.reason}"
 
-    sources = sorted({d.metadata.get("source", "documento") for d in docs})
+    sources = _sources_cited_in_response(response, results)
     return f"{response}\n\n[Fontes: {', '.join(sources)}]"
 
 
@@ -325,15 +556,18 @@ def _synthesize_from_results(
     results: List[Tuple],
     keywords: List[str],
     cfg: RAGConfig,
+    collection_name: str | None = None,
 ) -> str:
-    """Gera síntese estruturada dos resultados usando o SYNTHESIS_PROMPT."""
+    """Gera resposta estruturada usando os top N docs recuperados."""
     docs, _ = zip(*results)
     context  = _format_docs(list(docs), max_chars_per_doc=cfg.max_chars_per_doc)
     llm      = get_llm()
-    response = (SYNTHESIS_PROMPT | llm | StrOutputParser()).invoke({
-        "context":  context,
-        "question": query,
-        "keywords": ", ".join(keywords),
+    prompt   = _get_prompt(collection_name)
+    response = (prompt | llm | StrOutputParser()).invoke({
+        "context":     context,
+        "question":    query,
+        "n_docs":      len(docs),
+        "instruction": _BASE_INSTRUCTION,
     })
 
     if cfg.use_output_guard:
@@ -343,7 +577,7 @@ def _synthesize_from_results(
             print(f"[Guard:saída:{out_result.check}] Bloqueado")
             return f"Resposta bloqueada pelo sistema de segurança: {out_result.reason}"
 
-    sources = sorted({d.metadata.get("source", "documento") for d in docs})
+    sources = _sources_cited_in_response(response, results)
     return f"{response}\n\n[Fontes: {', '.join(sources)}]"
 
 
@@ -377,6 +611,15 @@ def answer_with_routing(
     # --- Roteamento ---
     target = collection_name or route_query(query)
 
+    # --- Extração de keywords (ou usa a query direta) ---
+    # use_keyword_extraction controla apenas COMO os keywords são obtidos.
+    # A geração sempre usa _synthesize_from_results com top_k_final docs.
+    if cfg.use_keyword_extraction:
+        from keyword_extractor import extract_keywords
+        keywords = extract_keywords(query)
+    else:
+        keywords = [query]
+
     if target is None:
         # Fallback: busca em todas as coleções
         results = search_all_collections(query, top_k=cfg.top_k_final)
@@ -385,17 +628,14 @@ def answer_with_routing(
                 "Não encontrei documentos relevantes o suficiente em nenhuma coleção.\n"
                 "Tente reformular a pergunta ou verifique se os dados foram ingeridos."
             )
-        return _answer_from_results(query, results, cfg)
+        return _synthesize_from_results(query, results, keywords, cfg, collection_name=None)
 
     # --- Busca na coleção roteada ---
     if cfg.use_keyword_extraction:
-        from keyword_extractor import extract_keywords
-        keywords = extract_keywords(query)
-        results  = _search_with_keywords(target, keywords, top_k=cfg.top_k_final)
+        results = _search_with_keywords(target, keywords, top_k=cfg.top_k_final)
     else:
-        keywords = [query]
-        store    = get_vector_store(collection_name=target)
-        results  = store.similarity_search_with_relevance_scores(query, k=cfg.top_k_final)
+        store   = get_vector_store(collection_name=target)
+        results = store.similarity_search_with_relevance_scores(query, k=cfg.top_k_final)
 
     if not results:
         return "Não há documentos na base. Execute a ingestão primeiro."
@@ -407,18 +647,14 @@ def answer_with_routing(
         print("[Pipeline] Score baixo — tentando fallback multi-coleção")
         fallback = search_all_collections(query, top_k=cfg.top_k_final)
         if fallback and max(s for _, s in fallback) >= config.RELEVANCE_THRESHOLD:
-            if cfg.use_keyword_extraction:
-                return _synthesize_from_results(query, fallback, keywords, cfg)
-            return _answer_from_results(query, fallback, cfg)
+            return _synthesize_from_results(query, fallback, keywords, cfg, collection_name=None)
         return (
             f"Não encontrei documentos relevantes o suficiente "
             f"(score={best_score:.3f} < {config.RELEVANCE_THRESHOLD}).\n"
             "Tente reformular a pergunta ou verifique se o documento foi ingerido."
         )
 
-    if cfg.use_keyword_extraction:
-        return _synthesize_from_results(query, results, keywords, cfg)
-    return _answer_from_results(query, results, cfg)
+    return _synthesize_from_results(query, results, keywords, cfg, collection_name=target)
 
 
 def demo_rag(query: str = "Qual o prazo para entrega da dissertação?"):

@@ -75,6 +75,42 @@ def load_crawled_data(input_path: str) -> list[dict]:
     return data
 
 
+def _deduplicate_servidores(pages: list[dict]) -> list[dict]:
+    """
+    Agrupa registros de servidor pelo nome e mantém apenas o mais informativo
+    (o de texto mais longo, que geralmente contém o currículo/Lattes).
+
+    O portal UFPel cria IDs separados por vínculo (ativo, substituto, etc.),
+    fazendo a mesma pessoa aparecer como múltiplas URLs. Sem isso, o RAG
+    mostraria várias fontes para o mesmo servidor.
+    """
+    import re
+    from collections import defaultdict
+
+    servidor_pages = [p for p in pages if p.get("tipo") == "servidor"]
+    other_pages    = [p for p in pages if p.get("tipo") != "servidor"]
+
+    by_name: dict[str, list[dict]] = defaultdict(list)
+    for page in servidor_pages:
+        m = re.search(r"Nome do Servidor:\s*(.+)", page.get("text", ""))
+        name = m.group(1).strip() if m else page["url"]
+        by_name[name].append(page)
+
+    deduped: list[dict] = []
+    removed = 0
+    for group in by_name.values():
+        # Mantém o registro com texto mais longo (mais completo/com Lattes)
+        primary = max(group, key=lambda p: len(p.get("text", "")))
+        deduped.append(primary)
+        removed += len(group) - 1
+
+    if removed:
+        print(f"[Dedup] {removed} registro(s) duplicado(s) de servidor removido(s) "
+              f"({len(deduped)} servidores únicos mantidos).")
+
+    return other_pages + deduped
+
+
 def pages_to_documents(pages: list[dict]) -> list[Document]:
     """
     Converte os dicionários do JSON em LangChain Documents.
@@ -87,6 +123,7 @@ def pages_to_documents(pages: list[dict]) -> list[Document]:
       categoria   → rótulo fixo para facilitar filtragem
       tipo        → 'projeto', 'disciplina' ou ausente (portal geral)
     """
+    pages = _deduplicate_servidores(pages)
     docs = []
     skipped = 0
     for page in pages:

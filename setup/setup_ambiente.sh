@@ -279,13 +279,13 @@ ENV_FILE="$PROJETO_DIR/.env"
 
 if [ ! -f "$ENV_FILE" ]; then
     cat > "$ENV_FILE" <<EOF
-# NVIDIA NIM (OBRIGATORIO — embeddings; LLM de fallback)
+# NVIDIA NIM (OBRIGATORIO — embeddings: nv-embedqa-e5-v5, 1024 dims)
 # Obtenha em: https://build.nvidia.com
 NVIDIA_API_KEY=sua_chave_aqui
 
-# Google Gemini (OBRIGATORIO — LLM principal)
-# Obtenha em: https://aistudio.google.com/app/apikey
-GOOGLE_API_KEY=sua_chave_aqui
+# OpenRouter (OBRIGATORIO — LLM de geração de respostas: deepseek/deepseek-v4-flash)
+# Obtenha em: https://openrouter.ai/keys
+OPENROUTER_API_KEY=sua_chave_aqui
 EOF
     echo "      Arquivo .env criado. EDITE com as chaves de API antes de executar."
 else
@@ -311,8 +311,8 @@ print()
 packages = [
     ("langchain",                     "LangChain"),
     ("langchain_community",           "LangChain Community"),
-    ("langchain_google_genai",        "LangChain Google Gemini"),
-    ("langchain_nvidia_ai_endpoints", "LangChain NVIDIA NIM"),
+    ("langchain_openai",              "LangChain OpenAI (OpenRouter)"),
+    ("langchain_nvidia_ai_endpoints", "LangChain NVIDIA NIM (embeddings)"),
     ("psycopg2",                      "psycopg2"),
     ("pgvector",                      "pgvector"),
     ("pypdf",                         "pypdf"),

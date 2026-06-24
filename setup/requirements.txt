@@ -10,8 +10,8 @@ langchain-text-splitters==1.1.2
 langchain-classic==1.0.7              # EnsembleRetriever (busca híbrida)
 
 # Embeddings e LLM via API (sem GPU local)
-langchain-google-genai==4.2.4        # Google Gemini (embedding + LLM)
-langchain-nvidia-ai-endpoints==1.4.0 # NVIDIA NIM (opcional)
+langchain-openai==1.3.3              # OpenRouter — LLM de geração (deepseek-v4-flash)
+langchain-nvidia-ai-endpoints==1.4.0 # NVIDIA NIM — embeddings (nv-embedqa-e5-v5)
 
 # Banco vetorial
 SQLAlchemy==2.0.50                   # ORM usado pelo LangChain PGVector

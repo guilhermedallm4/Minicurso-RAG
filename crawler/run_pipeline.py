@@ -6,7 +6,7 @@ Cada tipo de página (disciplina, projeto, servidor, unidade, curso)
 é inserido em sua própria coleção no pgvector.
 
 Uso:
-    # Tudo de uma vez (recomendado para produção)
+    # Tudo de uma vez com chunking semântico (recomendado)
     python run_pipeline.py --all-types --reset
 
     # Só disciplinas e projetos
@@ -20,6 +20,12 @@ Uso:
 
     # Re-ingerir a partir de JSON já existente (sem re-crawl)
     python run_pipeline.py --from-json dados_ufpel.json --reset
+
+    # Re-ingerir com chunking recursivo (legado)
+    python run_pipeline.py --from-json dados_ufpel.json --reset --chunking recursivo
+
+    # Free tier Google (limita docs e aumenta delay entre lotes)
+    python run_pipeline.py --all-types --reset --max-por-tipo 200 --delay 62
 """
 
 import argparse
@@ -42,7 +48,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--all-types",         action="store_true",
                    help="Crawlea todos os tipos em sequência.")
     p.add_argument("--projects-only",     action="store_true",
-                   help="Crawlea projetos (/projetos/id/).")
+                   help="Crawlea projetos (/projetos/id/p).")
     p.add_argument("--disciplines-only",  action="store_true",
                    help="Crawlea disciplinas (/disciplinas/id/).")
     p.add_argument("--servidores-only",   action="store_true",
@@ -52,15 +58,15 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--cursos-only",       action="store_true",
                    help="Crawlea cursos (/cursos/id/).")
     # ── Limites por tipo ─────────────────────────────────────────────────────
-    p.add_argument("--projects-max",      type=int, default=500,  metavar="N")
+    p.add_argument("--projects-max",      type=int, default=None,  metavar="N")
     p.add_argument("--disciplines-max",   type=int, default=None, metavar="N")
     p.add_argument("--servidores-max",    type=int, default=None, metavar="N")
     p.add_argument("--unidades-max",      type=int, default=None, metavar="N")
     p.add_argument("--cursos-max",        type=int, default=None, metavar="N")
-    p.add_argument("--max-pages",         type=int, default=150,  metavar="N",
-                   help="Máximo de páginas no crawl BFS geral")
-    p.add_argument("--depth",             type=int, default=3,    metavar="D",
-                   help="Profundidade máxima de navegação (BFS geral)")
+    p.add_argument("--max-pages",         type=int, default=None, metavar="N",
+                   help="Máximo de páginas no crawl BFS geral (padrão: sem limite)")
+    p.add_argument("--depth",             type=int, default=None, metavar="D",
+                   help="Profundidade máxima de navegação (BFS geral; padrão: sem limite)")
     # ── Saída e banco ────────────────────────────────────────────────────────
     p.add_argument("--output",            default=DEFAULT_JSON_OUTPUT, metavar="FILE",
                    help="Arquivo JSON onde os dados crawleados serão salvos")
@@ -68,6 +74,13 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Pula o crawl e ingesta diretamente a partir de um JSON existente")
     p.add_argument("--reset",             action="store_true",
                    help="Recria cada coleção no banco antes de inserir")
+    p.add_argument("--max-por-tipo",      type=int, default=None, metavar="N",
+                   help="Limita a N documentos por tipo na ingestão (útil no free tier Google)")
+    p.add_argument("--delay",             type=float, default=0.7, metavar="SECS",
+                   help="Segundos entre lotes de embedding (padrão: 0.7; free tier: use 62)")
+    p.add_argument("--chunking", choices=["semantico", "recursivo"], default="semantico",
+                   help="Estratégia de chunking: 'semantico' (padrão) respeita seções "
+                        "estruturadas; 'recursivo' usa RecursiveCharacterTextSplitter")
     return p
 
 
@@ -135,7 +148,14 @@ def main() -> None:
         print("[Erro] Nenhum documento válido para ingerir.")
         sys.exit(1)
 
-    summary = ingest_segmented(documents, reset=args.reset)
+    use_semantic = args.chunking == "semantico"
+    summary = ingest_segmented(
+        documents,
+        reset=args.reset,
+        delay=args.delay,
+        max_per_tipo=args.max_por_tipo,
+        use_semantic_chunking=use_semantic,
+    )
 
     # ── Resumo ────────────────────────────────────────────────────────────────
     tipos: dict[str, int] = {}
