@@ -1,0 +1,73 @@
+2026-06-26 12:55:56 [ERROR] reliability — [llm] FALHA — OpenRouter timeout [ctx=test]
+2026-06-26 12:55:56 [WARNING] reliability — [rag_pipeline] FALLBACK acionado — score baixo (0.21) em ufpel_cursos → usando todas as coleções
+2026-06-26 13:11:46 [INFO] reliability — [llm] OpenRouter: deepseek/deepseek-v4-flash
+2026-06-26 13:11:59 [INFO] reliability — [llm] OpenRouter: deepseek/deepseek-v4-flash
+2026-06-26 13:17:04 [INFO] reliability — [llm] OpenRouter: deepseek/deepseek-v4-flash
+2026-06-26 13:38:25 [INFO] reliability — [llm] OpenRouter: deepseek/deepseek-v4-flash
+2026-06-26 13:38:57 [INFO] reliability — [llm] OpenRouter: deepseek/deepseek-v4-flash
+2026-06-26 13:39:00 [INFO] reliability — [embeddings] NVIDIA NIM: nvidia/nv-embedqa-e5-v5 (1024 dims)
+2026-06-26 13:39:01 [INFO] reliability — [llm] OpenRouter: deepseek/deepseek-v4-flash
+2026-06-26 13:41:39 [INFO] reliability — [embeddings] NVIDIA NIM: nvidia/nv-embedqa-e5-v5 (1024 dims)
+2026-06-26 13:41:41 [INFO] reliability — [llm] NVIDIA NIM: deepseek-ai/deepseek-v4-pro
+2026-06-26 13:45:33 [INFO] reliability — [llm] OpenRouter: deepseek/deepseek-v4-flash
+2026-06-26 13:45:54 [INFO] reliability — [llm] OpenRouter: deepseek/deepseek-v4-flash
+2026-06-26 13:48:41 [INFO] reliability — [embeddings] NVIDIA NIM: nvidia/nv-embedqa-e5-v5 (1024 dims)
+2026-06-26 13:48:43 [INFO] reliability — [llm] NVIDIA NIM: deepseek-ai/deepseek-v4-pro
+2026-06-26 13:49:45 [WARNING] reliability — [llm] FALLBACK acionado — NVIDIA NIM: deepseek-ai/deepseek-v4-pro: APITimeoutError → usando NVIDIA NIM: deepseek-ai/deepseek-v4-flash
+2026-06-26 13:49:45 [INFO] reliability — [llm] NVIDIA NIM: deepseek-ai/deepseek-v4-flash
+2026-06-26 13:50:46 [WARNING] reliability — [llm] FALLBACK acionado — NVIDIA NIM: deepseek-ai/deepseek-v4-flash: APITimeoutError → usando OpenRouter: deepseek/deepseek-v4-flash
+2026-06-26 13:50:46 [INFO] reliability — [llm] OpenRouter: deepseek/deepseek-v4-flash
+2026-06-26 13:51:16 [WARNING] reliability — [llm] FALLBACK acionado — NVIDIA NIM: deepseek-ai/deepseek-v4-flash falhou → usando OpenRouter: deepseek/deepseek-v4-flash
+2026-06-26 13:53:33 [INFO] reliability — [llm] NVIDIA NIM: deepseek-ai/deepseek-v4-pro
+2026-06-26 13:54:34 [WARNING] reliability — [llm] FALLBACK acionado — NVIDIA NIM: deepseek-ai/deepseek-v4-pro: APITimeoutError → usando NVIDIA NIM: deepseek-ai/deepseek-v4-flash
+2026-06-26 13:54:34 [INFO] reliability — [llm] NVIDIA NIM: deepseek-ai/deepseek-v4-flash
+2026-06-26 13:54:46 [WARNING] reliability — [llm] FALLBACK acionado — NVIDIA NIM: deepseek-ai/deepseek-v4-pro falhou → usando NVIDIA NIM: deepseek-ai/deepseek-v4-flash
+2026-06-26 13:54:47 [INFO] reliability — [llm] NVIDIA NIM: deepseek-ai/deepseek-v4-pro
+2026-06-26 13:55:48 [WARNING] reliability — [llm] FALLBACK acionado — NVIDIA NIM: deepseek-ai/deepseek-v4-pro: APITimeoutError → usando NVIDIA NIM: deepseek-ai/deepseek-v4-flash
+2026-06-26 13:55:48 [INFO] reliability — [llm] NVIDIA NIM: deepseek-ai/deepseek-v4-flash
+2026-06-26 13:56:49 [WARNING] reliability — [llm] FALLBACK acionado — NVIDIA NIM: deepseek-ai/deepseek-v4-flash: APITimeoutError → usando OpenRouter: deepseek/deepseek-v4-flash
+2026-06-26 13:56:49 [INFO] reliability — [llm] OpenRouter: deepseek/deepseek-v4-flash
+2026-06-26 13:56:49 [INFO] reliability — [llm] Novo provedor primário após fallback: OpenRouter flash
+2026-06-26 13:57:10 [WARNING] reliability — [llm] FALLBACK acionado — NVIDIA NIM: deepseek-ai/deepseek-v4-flash falhou → usando OpenRouter: deepseek/deepseek-v4-flash
+2026-06-26 13:57:29 [INFO] reliability — [llm] NVIDIA NIM: deepseek-ai/deepseek-v4-pro
+2026-06-26 13:58:00 [WARNING] reliability — [llm] FALLBACK acionado — NVIDIA NIM: deepseek-ai/deepseek-v4-pro: RateLimitError → usando NVIDIA NIM: deepseek-ai/deepseek-v4-flash
+2026-06-26 13:58:00 [INFO] reliability — [llm] NVIDIA NIM: deepseek-ai/deepseek-v4-flash
+2026-06-26 13:59:01 [WARNING] reliability — [llm] FALLBACK acionado — NVIDIA NIM: deepseek-ai/deepseek-v4-flash: APITimeoutError → usando OpenRouter: deepseek/deepseek-v4-flash
+2026-06-26 13:59:01 [INFO] reliability — [llm] OpenRouter: deepseek/deepseek-v4-flash
+2026-06-26 13:59:08 [WARNING] reliability — [llm] FALLBACK acionado — NVIDIA NIM: deepseek-ai/deepseek-v4-flash falhou → usando OpenRouter: deepseek/deepseek-v4-flash
+2026-06-26 13:59:09 [INFO] reliability — [llm] NVIDIA NIM: deepseek-ai/deepseek-v4-pro
+2026-06-26 13:59:11 [WARNING] reliability — [llm] FALLBACK acionado — NVIDIA NIM: deepseek-ai/deepseek-v4-pro: RateLimitError → usando NVIDIA NIM: deepseek-ai/deepseek-v4-flash
+2026-06-26 13:59:11 [INFO] reliability — [llm] NVIDIA NIM: deepseek-ai/deepseek-v4-flash
+2026-06-26 14:00:11 [WARNING] reliability — [llm] FALLBACK acionado — NVIDIA NIM: deepseek-ai/deepseek-v4-flash: APITimeoutError → usando OpenRouter: deepseek/deepseek-v4-flash
+2026-06-26 14:00:11 [INFO] reliability — [llm] OpenRouter: deepseek/deepseek-v4-flash
+2026-06-26 14:00:15 [WARNING] reliability — [llm] FALLBACK acionado — NVIDIA NIM: deepseek-ai/deepseek-v4-flash falhou → usando OpenRouter: deepseek/deepseek-v4-flash
+2026-06-26 14:01:43 [INFO] reliability — [llm] NVIDIA NIM: deepseek-ai/deepseek-v4-pro
+2026-06-26 14:01:45 [WARNING] reliability — [llm] FALLBACK acionado — NVIDIA NIM: deepseek-ai/deepseek-v4-pro: RateLimitError → usando NVIDIA NIM: deepseek-ai/deepseek-v4-flash
+2026-06-26 14:01:45 [INFO] reliability — [llm] NVIDIA NIM: deepseek-ai/deepseek-v4-flash
+2026-06-26 14:02:46 [WARNING] reliability — [llm] FALLBACK acionado — NVIDIA NIM: deepseek-ai/deepseek-v4-flash: APITimeoutError → usando OpenRouter: deepseek/deepseek-v4-flash
+2026-06-26 14:02:46 [INFO] reliability — [llm] OpenRouter: deepseek/deepseek-v4-flash
+2026-06-26 14:02:56 [WARNING] reliability — [llm] FALLBACK acionado — NVIDIA NIM: deepseek-ai/deepseek-v4-flash falhou → usando OpenRouter: deepseek/deepseek-v4-flash
+2026-06-26 14:02:56 [INFO] reliability — [llm] Novo provedor primário após fallback: OpenRouter: deepseek/deepseek-v4-flash
+2026-06-26 14:03:00 [INFO] reliability — [llm] OpenRouter: deepseek/deepseek-v4-flash
+2026-06-26 14:04:21 [INFO] reliability — [llm] OpenRouter: deepseek/deepseek-v4-flash
+2026-06-26 14:04:26 [INFO] reliability — [llm] OpenRouter: deepseek/deepseek-v4-flash
+2026-06-26 14:04:49 [INFO] reliability — [embeddings] NVIDIA NIM: nvidia/nv-embedqa-e5-v5 (1024 dims)
+2026-06-26 14:04:50 [INFO] reliability — [llm] OpenRouter: deepseek/deepseek-v4-flash
+2026-06-26 14:08:36 [INFO] reliability — [llm] OpenRouter: deepseek/deepseek-v4-flash
+2026-06-26 14:08:46 [INFO] reliability — [llm] OpenRouter: deepseek/deepseek-v4-flash
+2026-06-26 14:09:10 [INFO] reliability — [llm] OpenRouter: deepseek/deepseek-v4-flash
+2026-06-26 14:16:17 [INFO] reliability — [llm] OpenRouter: deepseek/deepseek-v4-flash
+2026-06-26 14:16:22 [INFO] reliability — [llm] OpenRouter: deepseek/deepseek-v4-flash
+2026-06-26 14:20:28 [INFO] reliability — [llm] OpenRouter: deepseek/deepseek-v4-flash
+2026-06-26 14:28:11 [INFO] reliability — [embeddings] NVIDIA NIM: nvidia/nv-embedqa-e5-v5 (1024 dims)
+2026-06-26 14:28:13 [INFO] reliability — [llm] NVIDIA NIM: deepseek-ai/deepseek-v4-pro
+2026-06-26 14:28:15 [WARNING] reliability — [llm] FALLBACK acionado — NVIDIA NIM: deepseek-ai/deepseek-v4-pro: RateLimitError → usando NVIDIA NIM: deepseek-ai/deepseek-v4-flash
+2026-06-26 14:28:15 [INFO] reliability — [llm] NVIDIA NIM: deepseek-ai/deepseek-v4-flash
+2026-06-26 14:29:12 [WARNING] reliability — [llm] FALLBACK acionado — NVIDIA NIM: deepseek-ai/deepseek-v4-pro falhou → usando NVIDIA NIM: deepseek-ai/deepseek-v4-flash
+2026-06-26 14:29:12 [INFO] reliability — [llm] Novo provedor primário após fallback: NVIDIA NIM: deepseek-ai/deepseek-v4-flash
+2026-06-26 14:32:04 [INFO] reliability — [llm] NVIDIA NIM: deepseek-ai/deepseek-v4-flash
+2026-06-26 14:34:13 [INFO] reliability — [llm] NVIDIA NIM: deepseek-ai/deepseek-v4-flash
+2026-06-26 14:35:14 [WARNING] reliability — [llm] FALLBACK acionado — NVIDIA NIM: deepseek-ai/deepseek-v4-flash: APITimeoutError → usando OpenRouter: deepseek/deepseek-v4-flash
+2026-06-26 14:35:14 [INFO] reliability — [llm] OpenRouter: deepseek/deepseek-v4-flash
+2026-06-26 14:35:40 [WARNING] reliability — [llm] FALLBACK acionado — NVIDIA NIM: deepseek-ai/deepseek-v4-flash falhou → usando OpenRouter: deepseek/deepseek-v4-flash
+2026-06-26 14:35:40 [INFO] reliability — [llm] Novo provedor primário após fallback: OpenRouter: deepseek/deepseek-v4-flash

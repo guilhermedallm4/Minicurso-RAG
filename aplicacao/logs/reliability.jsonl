@@ -1,0 +1,103 @@
+{"ts": "2026-06-26T15:55:56.507577+00:00", "event": "success", "component": "llm", "elapsed_ms": 10.084591805934906, "context": "test"}
+{"ts": "2026-06-26T15:55:56.518070+00:00", "event": "success", "component": "llm", "elapsed_ms": 10.083955014124513, "context": "test"}
+{"ts": "2026-06-26T15:55:56.530266+00:00", "event": "success", "component": "llm", "elapsed_ms": 11.865542037412524, "context": "test"}
+{"ts": "2026-06-26T15:55:56.530550+00:00", "event": "failure", "component": "llm", "elapsed_ms": 0.009070849046111107, "context": "test", "error": "OpenRouter timeout"}
+{"ts": "2026-06-26T15:55:56.531038+00:00", "event": "fallback", "component": "rag_pipeline", "reason": "score baixo (0.21) em ufpel_cursos", "fallback_to": "todas as coleções"}
+{"ts": "2026-06-26T16:11:46.881913+00:00", "event": "info", "component": "llm", "message": "OpenRouter: deepseek/deepseek-v4-flash"}
+{"ts": "2026-06-26T16:11:59.500226+00:00", "event": "info", "component": "llm", "message": "OpenRouter: deepseek/deepseek-v4-flash"}
+{"ts": "2026-06-26T16:12:29.044112+00:00", "event": "success", "component": "rag_pipeline", "elapsed_ms": 42171.1168999318, "context": "answer_with_routing"}
+{"ts": "2026-06-26T16:17:04.754969+00:00", "event": "info", "component": "llm", "message": "OpenRouter: deepseek/deepseek-v4-flash"}
+{"ts": "2026-06-26T16:17:37.505309+00:00", "event": "success", "component": "rag_pipeline", "elapsed_ms": 33113.522686995566, "context": "answer_with_routing"}
+{"ts": "2026-06-26T16:38:25.914754+00:00", "event": "info", "component": "llm", "message": "OpenRouter: deepseek/deepseek-v4-flash"}
+{"ts": "2026-06-26T16:38:36.126485+00:00", "event": "success", "component": "rag_pipeline", "elapsed_ms": 10549.303428968415, "context": "answer_with_routing"}
+{"ts": "2026-06-26T16:38:57.155109+00:00", "event": "info", "component": "llm", "message": "OpenRouter: deepseek/deepseek-v4-flash"}
+{"ts": "2026-06-26T16:39:00.518367+00:00", "event": "info", "component": "embeddings", "message": "NVIDIA NIM: nvidia/nv-embedqa-e5-v5 (1024 dims)"}
+{"ts": "2026-06-26T16:39:01.269132+00:00", "event": "success", "component": "rag_pipeline", "elapsed_ms": 751.0178701486439, "context": "vector_search:ufpel_cursos"}
+{"ts": "2026-06-26T16:39:01.315332+00:00", "event": "info", "component": "llm", "message": "OpenRouter: deepseek/deepseek-v4-flash"}
+{"ts": "2026-06-26T16:39:14.654445+00:00", "event": "success", "component": "llm", "elapsed_ms": 13338.059870991856, "context": "synthesize:ufpel_cursos"}
+{"ts": "2026-06-26T16:39:14.654980+00:00", "event": "success", "component": "rag_pipeline", "elapsed_ms": 17502.097957069054, "context": "answer_with_routing"}
+{"ts": "2026-06-26T16:41:39.958621+00:00", "event": "info", "component": "embeddings", "message": "NVIDIA NIM: nvidia/nv-embedqa-e5-v5 (1024 dims)"}
+{"ts": "2026-06-26T16:41:41.298607+00:00", "event": "info", "component": "llm", "message": "NVIDIA NIM: deepseek-ai/deepseek-v4-pro"}
+{"ts": "2026-06-26T16:45:33.585925+00:00", "event": "info", "component": "llm", "message": "OpenRouter: deepseek/deepseek-v4-flash"}
+{"ts": "2026-06-26T16:45:36.566043+00:00", "event": "success", "component": "rag_pipeline", "elapsed_ms": 3051.9977051299065, "context": "answer_with_routing"}
+{"ts": "2026-06-26T16:45:54.840601+00:00", "event": "info", "component": "llm", "message": "OpenRouter: deepseek/deepseek-v4-flash"}
+{"ts": "2026-06-26T16:46:00.843539+00:00", "event": "success", "component": "rag_pipeline", "elapsed_ms": 6047.209229087457, "context": "answer_with_routing"}
+{"ts": "2026-06-26T16:48:41.918303+00:00", "event": "info", "component": "embeddings", "message": "NVIDIA NIM: nvidia/nv-embedqa-e5-v5 (1024 dims)"}
+{"ts": "2026-06-26T16:48:42.624264+00:00", "event": "success", "component": "rag_pipeline", "elapsed_ms": 706.2108428217471, "context": "vector_search:ufpel_projetos"}
+{"ts": "2026-06-26T16:48:43.889002+00:00", "event": "info", "component": "llm", "message": "NVIDIA NIM: deepseek-ai/deepseek-v4-pro"}
+{"ts": "2026-06-26T16:49:45.650973+00:00", "event": "fallback", "component": "llm", "reason": "NVIDIA NIM: deepseek-ai/deepseek-v4-pro: APITimeoutError", "fallback_to": "NVIDIA NIM: deepseek-ai/deepseek-v4-flash"}
+{"ts": "2026-06-26T16:49:45.651656+00:00", "event": "info", "component": "llm", "message": "NVIDIA NIM: deepseek-ai/deepseek-v4-flash"}
+{"ts": "2026-06-26T16:50:46.670743+00:00", "event": "fallback", "component": "llm", "reason": "NVIDIA NIM: deepseek-ai/deepseek-v4-flash: APITimeoutError", "fallback_to": "OpenRouter: deepseek/deepseek-v4-flash"}
+{"ts": "2026-06-26T16:50:46.671042+00:00", "event": "info", "component": "llm", "message": "OpenRouter: deepseek/deepseek-v4-flash"}
+{"ts": "2026-06-26T16:51:16.856512+00:00", "event": "fallback", "component": "llm", "reason": "NVIDIA NIM: deepseek-ai/deepseek-v4-flash falhou", "fallback_to": "OpenRouter: deepseek/deepseek-v4-flash"}
+{"ts": "2026-06-26T16:51:16.857167+00:00", "event": "success", "component": "llm", "elapsed_ms": 153814.50594682246, "context": "synthesize:ufpel_projetos"}
+{"ts": "2026-06-26T16:51:16.857563+00:00", "event": "success", "component": "rag_pipeline", "elapsed_ms": 154984.84105686657, "context": "answer_with_routing"}
+{"ts": "2026-06-26T16:53:33.484853+00:00", "event": "info", "component": "llm", "message": "NVIDIA NIM: deepseek-ai/deepseek-v4-pro"}
+{"ts": "2026-06-26T16:54:34.549137+00:00", "event": "fallback", "component": "llm", "reason": "NVIDIA NIM: deepseek-ai/deepseek-v4-pro: APITimeoutError", "fallback_to": "NVIDIA NIM: deepseek-ai/deepseek-v4-flash"}
+{"ts": "2026-06-26T16:54:34.549607+00:00", "event": "info", "component": "llm", "message": "NVIDIA NIM: deepseek-ai/deepseek-v4-flash"}
+{"ts": "2026-06-26T16:54:46.535274+00:00", "event": "fallback", "component": "llm", "reason": "NVIDIA NIM: deepseek-ai/deepseek-v4-pro falhou", "fallback_to": "NVIDIA NIM: deepseek-ai/deepseek-v4-flash"}
+{"ts": "2026-06-26T16:54:47.697412+00:00", "event": "info", "component": "llm", "message": "NVIDIA NIM: deepseek-ai/deepseek-v4-pro"}
+{"ts": "2026-06-26T16:55:48.443774+00:00", "event": "fallback", "component": "llm", "reason": "NVIDIA NIM: deepseek-ai/deepseek-v4-pro: APITimeoutError", "fallback_to": "NVIDIA NIM: deepseek-ai/deepseek-v4-flash"}
+{"ts": "2026-06-26T16:55:48.444072+00:00", "event": "info", "component": "llm", "message": "NVIDIA NIM: deepseek-ai/deepseek-v4-flash"}
+{"ts": "2026-06-26T16:56:49.417211+00:00", "event": "fallback", "component": "llm", "reason": "NVIDIA NIM: deepseek-ai/deepseek-v4-flash: APITimeoutError", "fallback_to": "OpenRouter: deepseek/deepseek-v4-flash"}
+{"ts": "2026-06-26T16:56:49.417628+00:00", "event": "info", "component": "llm", "message": "OpenRouter: deepseek/deepseek-v4-flash"}
+{"ts": "2026-06-26T16:56:49.978147+00:00", "event": "info", "component": "llm", "message": "Novo provedor primário após fallback: OpenRouter flash"}
+{"ts": "2026-06-26T16:57:10.991738+00:00", "event": "fallback", "component": "llm", "reason": "NVIDIA NIM: deepseek-ai/deepseek-v4-flash falhou", "fallback_to": "OpenRouter: deepseek/deepseek-v4-flash"}
+{"ts": "2026-06-26T16:57:10.992600+00:00", "event": "success", "component": "rag_pipeline", "elapsed_ms": 217511.60880108364, "context": "answer_with_routing"}
+{"ts": "2026-06-26T16:57:29.833443+00:00", "event": "info", "component": "llm", "message": "NVIDIA NIM: deepseek-ai/deepseek-v4-pro"}
+{"ts": "2026-06-26T16:58:00.985008+00:00", "event": "fallback", "component": "llm", "reason": "NVIDIA NIM: deepseek-ai/deepseek-v4-pro: RateLimitError", "fallback_to": "NVIDIA NIM: deepseek-ai/deepseek-v4-flash"}
+{"ts": "2026-06-26T16:58:00.985345+00:00", "event": "info", "component": "llm", "message": "NVIDIA NIM: deepseek-ai/deepseek-v4-flash"}
+{"ts": "2026-06-26T16:59:01.763093+00:00", "event": "fallback", "component": "llm", "reason": "NVIDIA NIM: deepseek-ai/deepseek-v4-flash: APITimeoutError", "fallback_to": "OpenRouter: deepseek/deepseek-v4-flash"}
+{"ts": "2026-06-26T16:59:01.763418+00:00", "event": "info", "component": "llm", "message": "OpenRouter: deepseek/deepseek-v4-flash"}
+{"ts": "2026-06-26T16:59:08.406251+00:00", "event": "fallback", "component": "llm", "reason": "NVIDIA NIM: deepseek-ai/deepseek-v4-flash falhou", "fallback_to": "OpenRouter: deepseek/deepseek-v4-flash"}
+{"ts": "2026-06-26T16:59:09.925608+00:00", "event": "info", "component": "llm", "message": "NVIDIA NIM: deepseek-ai/deepseek-v4-pro"}
+{"ts": "2026-06-26T16:59:11.002609+00:00", "event": "fallback", "component": "llm", "reason": "NVIDIA NIM: deepseek-ai/deepseek-v4-pro: RateLimitError", "fallback_to": "NVIDIA NIM: deepseek-ai/deepseek-v4-flash"}
+{"ts": "2026-06-26T16:59:11.003030+00:00", "event": "info", "component": "llm", "message": "NVIDIA NIM: deepseek-ai/deepseek-v4-flash"}
+{"ts": "2026-06-26T17:00:11.719971+00:00", "event": "fallback", "component": "llm", "reason": "NVIDIA NIM: deepseek-ai/deepseek-v4-flash: APITimeoutError", "fallback_to": "OpenRouter: deepseek/deepseek-v4-flash"}
+{"ts": "2026-06-26T17:00:11.720425+00:00", "event": "info", "component": "llm", "message": "OpenRouter: deepseek/deepseek-v4-flash"}
+{"ts": "2026-06-26T17:00:15.698454+00:00", "event": "fallback", "component": "llm", "reason": "NVIDIA NIM: deepseek-ai/deepseek-v4-flash falhou", "fallback_to": "OpenRouter: deepseek/deepseek-v4-flash"}
+{"ts": "2026-06-26T17:00:15.699293+00:00", "event": "success", "component": "rag_pipeline", "elapsed_ms": 165868.12762590125, "context": "answer_with_routing"}
+{"ts": "2026-06-26T17:01:43.948986+00:00", "event": "info", "component": "llm", "message": "NVIDIA NIM: deepseek-ai/deepseek-v4-pro"}
+{"ts": "2026-06-26T17:01:45.855725+00:00", "event": "fallback", "component": "llm", "reason": "NVIDIA NIM: deepseek-ai/deepseek-v4-pro: RateLimitError", "fallback_to": "NVIDIA NIM: deepseek-ai/deepseek-v4-flash"}
+{"ts": "2026-06-26T17:01:45.856044+00:00", "event": "info", "component": "llm", "message": "NVIDIA NIM: deepseek-ai/deepseek-v4-flash"}
+{"ts": "2026-06-26T17:02:46.643763+00:00", "event": "fallback", "component": "llm", "reason": "NVIDIA NIM: deepseek-ai/deepseek-v4-flash: APITimeoutError", "fallback_to": "OpenRouter: deepseek/deepseek-v4-flash"}
+{"ts": "2026-06-26T17:02:46.644161+00:00", "event": "info", "component": "llm", "message": "OpenRouter: deepseek/deepseek-v4-flash"}
+{"ts": "2026-06-26T17:02:56.882985+00:00", "event": "fallback", "component": "llm", "reason": "NVIDIA NIM: deepseek-ai/deepseek-v4-flash falhou", "fallback_to": "OpenRouter: deepseek/deepseek-v4-flash"}
+{"ts": "2026-06-26T17:02:56.883482+00:00", "event": "info", "component": "llm", "message": "Novo provedor primário após fallback: OpenRouter: deepseek/deepseek-v4-flash"}
+{"ts": "2026-06-26T17:03:00.780879+00:00", "event": "info", "component": "llm", "message": "OpenRouter: deepseek/deepseek-v4-flash"}
+{"ts": "2026-06-26T17:03:19.367987+00:00", "event": "success", "component": "rag_pipeline", "elapsed_ms": 96369.43139485084, "context": "answer_with_routing"}
+{"ts": "2026-06-26T17:04:21.715481+00:00", "event": "info", "component": "llm", "message": "OpenRouter: deepseek/deepseek-v4-flash"}
+{"ts": "2026-06-26T17:04:26.124520+00:00", "event": "info", "component": "llm", "message": "OpenRouter: deepseek/deepseek-v4-flash"}
+{"ts": "2026-06-26T17:04:30.186166+00:00", "event": "success", "component": "rag_pipeline", "elapsed_ms": 8472.87185001187, "context": "answer_with_routing"}
+{"ts": "2026-06-26T17:04:49.890024+00:00", "event": "info", "component": "embeddings", "message": "NVIDIA NIM: nvidia/nv-embedqa-e5-v5 (1024 dims)"}
+{"ts": "2026-06-26T17:04:50.587885+00:00", "event": "success", "component": "rag_pipeline", "elapsed_ms": 698.0434390716255, "context": "vector_search:ufpel_unidades"}
+{"ts": "2026-06-26T17:04:50.615544+00:00", "event": "info", "component": "llm", "message": "OpenRouter: deepseek/deepseek-v4-flash"}
+{"ts": "2026-06-26T17:05:17.450405+00:00", "event": "success", "component": "llm", "elapsed_ms": 26836.541346041486, "context": "synthesize:ufpel_unidades"}
+{"ts": "2026-06-26T17:05:17.451000+00:00", "event": "success", "component": "rag_pipeline", "elapsed_ms": 27564.901869976893, "context": "answer_with_routing"}
+{"ts": "2026-06-26T17:08:36.621551+00:00", "event": "info", "component": "llm", "message": "OpenRouter: deepseek/deepseek-v4-flash"}
+{"ts": "2026-06-26T17:08:46.652207+00:00", "event": "info", "component": "llm", "message": "OpenRouter: deepseek/deepseek-v4-flash"}
+{"ts": "2026-06-26T17:08:50.082853+00:00", "event": "success", "component": "rag_pipeline", "elapsed_ms": 13463.769726920873, "context": "answer_with_routing"}
+{"ts": "2026-06-26T17:09:10.192455+00:00", "event": "info", "component": "llm", "message": "OpenRouter: deepseek/deepseek-v4-flash"}
+{"ts": "2026-06-26T17:09:26.709443+00:00", "event": "success", "component": "rag_pipeline", "elapsed_ms": 16557.66249401495, "context": "answer_with_routing"}
+{"ts": "2026-06-26T17:16:17.517325+00:00", "event": "info", "component": "llm", "message": "OpenRouter: deepseek/deepseek-v4-flash"}
+{"ts": "2026-06-26T17:16:22.246528+00:00", "event": "info", "component": "llm", "message": "OpenRouter: deepseek/deepseek-v4-flash"}
+{"ts": "2026-06-26T17:16:33.404765+00:00", "event": "success", "component": "rag_pipeline", "elapsed_ms": 15890.497393207625, "context": "answer_with_routing"}
+{"ts": "2026-06-26T17:20:28.481913+00:00", "event": "info", "component": "llm", "message": "OpenRouter: deepseek/deepseek-v4-flash"}
+{"ts": "2026-06-26T17:20:43.716513+00:00", "event": "success", "component": "rag_pipeline", "elapsed_ms": 15520.405860850587, "context": "answer_with_routing"}
+{"ts": "2026-06-26T17:28:11.994117+00:00", "event": "info", "component": "embeddings", "message": "NVIDIA NIM: nvidia/nv-embedqa-e5-v5 (1024 dims)"}
+{"ts": "2026-06-26T17:28:12.755532+00:00", "event": "success", "component": "rag_pipeline", "elapsed_ms": 761.6359600797296, "context": "vector_search:ufpel_projetos"}
+{"ts": "2026-06-26T17:28:13.714351+00:00", "event": "info", "component": "llm", "message": "NVIDIA NIM: deepseek-ai/deepseek-v4-pro"}
+{"ts": "2026-06-26T17:28:15.684478+00:00", "event": "fallback", "component": "llm", "reason": "NVIDIA NIM: deepseek-ai/deepseek-v4-pro: RateLimitError", "fallback_to": "NVIDIA NIM: deepseek-ai/deepseek-v4-flash"}
+{"ts": "2026-06-26T17:28:15.684921+00:00", "event": "info", "component": "llm", "message": "NVIDIA NIM: deepseek-ai/deepseek-v4-flash"}
+{"ts": "2026-06-26T17:29:12.610550+00:00", "event": "fallback", "component": "llm", "reason": "NVIDIA NIM: deepseek-ai/deepseek-v4-pro falhou", "fallback_to": "NVIDIA NIM: deepseek-ai/deepseek-v4-flash"}
+{"ts": "2026-06-26T17:29:12.611033+00:00", "event": "info", "component": "llm", "message": "Novo provedor primário após fallback: NVIDIA NIM: deepseek-ai/deepseek-v4-flash"}
+{"ts": "2026-06-26T17:29:12.611868+00:00", "event": "success", "component": "llm", "elapsed_ms": 59438.738548895344, "context": "synthesize:ufpel_projetos"}
+{"ts": "2026-06-26T17:29:12.612425+00:00", "event": "success", "component": "rag_pipeline", "elapsed_ms": 60793.89215284027, "context": "answer_with_routing"}
+{"ts": "2026-06-26T17:32:04.940568+00:00", "event": "info", "component": "llm", "message": "NVIDIA NIM: deepseek-ai/deepseek-v4-flash"}
+{"ts": "2026-06-26T17:32:13.570150+00:00", "event": "success", "component": "rag_pipeline", "elapsed_ms": 8672.64744010754, "context": "answer_with_routing"}
+{"ts": "2026-06-26T17:34:13.939224+00:00", "event": "info", "component": "llm", "message": "NVIDIA NIM: deepseek-ai/deepseek-v4-flash"}
+{"ts": "2026-06-26T17:35:14.913642+00:00", "event": "fallback", "component": "llm", "reason": "NVIDIA NIM: deepseek-ai/deepseek-v4-flash: APITimeoutError", "fallback_to": "OpenRouter: deepseek/deepseek-v4-flash"}
+{"ts": "2026-06-26T17:35:14.914096+00:00", "event": "info", "component": "llm", "message": "OpenRouter: deepseek/deepseek-v4-flash"}
+{"ts": "2026-06-26T17:35:40.964589+00:00", "event": "fallback", "component": "llm", "reason": "NVIDIA NIM: deepseek-ai/deepseek-v4-flash falhou", "fallback_to": "OpenRouter: deepseek/deepseek-v4-flash"}
+{"ts": "2026-06-26T17:35:40.965079+00:00", "event": "info", "component": "llm", "message": "Novo provedor primário após fallback: OpenRouter: deepseek/deepseek-v4-flash"}
+{"ts": "2026-06-26T17:35:40.965891+00:00", "event": "success", "component": "rag_pipeline", "elapsed_ms": 87100.96643888392, "context": "answer_with_routing"}
