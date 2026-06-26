@@ -83,8 +83,8 @@ class InputGuard:
 
     def __init__(
         self,
-        min_len: int = 5,
-        max_len: int = 500,
+        min_len: int = 3,
+        max_len: int = 1000,
         block_pii: bool = True,
         block_injection: bool = True,
         topic_guard_llm: bool = False,    # requer LLM, adiciona latência
@@ -162,8 +162,9 @@ class InputGuard:
 
         prompt = ChatPromptTemplate.from_template(
             "Responda APENAS com 'SIM' ou 'NAO'.\n"
-            "A pergunta abaixo é sobre assuntos acadêmicos ou serviços universitários "
-            "(matrícula, biblioteca, restaurante, pós-graduação, etc.)?\n\n"
+            "A pergunta abaixo tem relação com a Universidade Federal de Pelotas (UFPel): "
+            "cursos, disciplinas, professores, pesquisas, serviços, estrutura ou informações "
+            "institucionais?\n\n"
             "Pergunta: {query}"
         )
         chain = prompt | get_llm() | StrOutputParser()
@@ -172,7 +173,8 @@ class InputGuard:
         if "NAO" in resposta or "NÃO" in resposta:
             return GuardResult(
                 False, "topic_llm",
-                "Este assistente responde apenas sobre documentos institucionais da universidade.",
+                "Este assistente responde apenas sobre a UFPel e seus documentos institucionais.\n"
+                "Para outros assuntos, consulte https://ufpel.edu.br",
                 "medium",
             )
         return GuardResult(True, "topic_llm", "OK")
@@ -187,16 +189,18 @@ class OutputGuard:
     Valida a resposta do LLM antes de entregar ao usuário.
     """
 
+    # Padrões de recusa legítima do modelo — não bloqueados, apenas registrados
     _RECUSA_PATTERNS = [
         r"não (consigo|posso|me é possível) (fornecer|responder|ajudar)",
         r"não (tenho|possuo) (informações|dados|acesso)",
         r"fora do (meu |)escopo",
         r"não encontrei.*documento",
+        r"não há informações",
     ]
 
     def __init__(
         self,
-        max_len: int = 3000,
+        max_len: int = 8000,
         hallucination_guard_llm: bool = False,
     ):
         self.max_len = max_len
@@ -245,9 +249,10 @@ class OutputGuard:
 
         prompt = ChatPromptTemplate.from_template(
             "Responda APENAS com 'SIM' ou 'NAO'.\n"
-            "A resposta abaixo está completamente fundamentada nas informações do contexto? "
-            "Não há informações inventadas que não aparecem no contexto?\n\n"
-            "Contexto:\n{context}\n\n"
+            "A resposta abaixo é consistente com as informações do contexto fornecido? "
+            "(Considere 'SIM' se os fatos principais estão no contexto, mesmo que a "
+            "resposta use outras palavras para expressar a mesma ideia.)\n\n"
+            "Contexto (trecho):\n{context}\n\n"
             "Resposta gerada:\n{response}"
         )
         chain = prompt | get_llm() | StrOutputParser()

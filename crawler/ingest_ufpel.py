@@ -48,7 +48,7 @@ DEFAULT_INPUT     = "dados_ufpel.json"
 # Free tier do Google: 100 embed_content calls/min.
 # batch_size interno do langchain_google_genai = 100 textos/call.
 # Com INGEST_BATCH_SIZE=100 → 1 call por lote → ~85 lotes/min com INGEST_DELAY=0.7s.
-INGEST_BATCH_SIZE = 100
+INGEST_BATCH_SIZE = 500
 INGEST_DELAY      = 0.7   # segundos entre lotes (~85 chamadas/min — abaixo do limite de 100)
 INGEST_MAX_RETRY  = 3     # tentativas por lote em erros transitórios (502, 503)
 
@@ -60,6 +60,8 @@ TIPO_TO_TABLE: dict[str, str] = {
     "servidor":     "servidores",
     "unidade":      "unidades",
     "curso":        "cursos",
+    "gestao":       "gestao",
+    "sobre":        "sobre",
     "portal_geral": "portal_geral",
 }
 
@@ -77,12 +79,13 @@ def load_crawled_data(input_path: str) -> list[dict]:
 
 def _deduplicate_servidores(pages: list[dict]) -> list[dict]:
     """
-    Agrupa registros de servidor pelo nome e mantém apenas o mais informativo
-    (o de texto mais longo, que geralmente contém o currículo/Lattes).
+    Agrupa registros de servidor pelo nome e mantém apenas o mais informativo.
 
     O portal UFPel cria IDs separados por vínculo (ativo, substituto, etc.),
     fazendo a mesma pessoa aparecer como múltiplas URLs. Sem isso, o RAG
     mostraria várias fontes para o mesmo servidor.
+
+    Suporta o novo schema (campo 'titulo') e o legado (campo 'text').
     """
     import re
     from collections import defaultdict
@@ -92,15 +95,22 @@ def _deduplicate_servidores(pages: list[dict]) -> list[dict]:
 
     by_name: dict[str, list[dict]] = defaultdict(list)
     for page in servidor_pages:
-        m = re.search(r"Nome do Servidor:\s*(.+)", page.get("text", ""))
-        name = m.group(1).strip() if m else page["url"]
+        # Novo schema: nome em 'titulo'
+        if "titulo" in page:
+            name = page["titulo"] or page.get("metadata", {}).get("url", "")
+        else:
+            # Legado: extrai "Nome do Servidor:" do campo text
+            m = re.search(r"Nome do Servidor:\s*(.+)", page.get("text", ""))
+            name = m.group(1).strip() if m else page.get("url", "")
         by_name[name].append(page)
 
     deduped: list[dict] = []
     removed = 0
     for group in by_name.values():
-        # Mantém o registro com texto mais longo (mais completo/com Lattes)
-        primary = max(group, key=lambda p: len(p.get("text", "")))
+        # Mantém o registro com conteúdo mais longo (mais completo/com Lattes)
+        def _content_len(p: dict) -> int:
+            return len(p.get("embedding_text") or p.get("text") or "")
+        primary = max(group, key=_content_len)
         deduped.append(primary)
         removed += len(group) - 1
 
@@ -111,43 +121,290 @@ def _deduplicate_servidores(pages: list[dict]) -> list[dict]:
     return other_pages + deduped
 
 
+def _enrich_curso_professores(pages: list[dict]) -> list[dict]:
+    """
+    Enriquece os professores de cada curso com a URL do Lattes e a lotação
+    correta, cruzando a URL do servidor (/servidores/id/XXX) com os dados
+    dos próprios documentos de servidor já presentes na lista de páginas.
+
+    Isso permite que o RAG retorne "Professor X — Lattes: https://..." ao
+    responder "Quais professores do curso de Medicina?".
+    """
+    EMPTY = "Não há informações disponíveis"
+
+    # Índice rápido: URL do servidor → dados_completos
+    url_to_srv: dict[str, dict] = {}
+    for p in pages:
+        if p.get("tipo") == "servidor":
+            srv_url = p.get("metadata", {}).get("url", "")
+            if srv_url:
+                url_to_srv[srv_url] = p.get("dados_completos", {})
+
+    enriched = 0
+    for page in pages:
+        if page.get("tipo") != "curso":
+            continue
+        dados = page.get("dados_completos", {})
+        profs = dados.get("professores", [])
+        changed = False
+        for prof in profs:
+            srv_url = prof.get("url", "")
+            if srv_url and srv_url in url_to_srv:
+                srv = url_to_srv[srv_url]
+                if not prof.get("lattes") and srv.get("lattes_url") and srv["lattes_url"] != EMPTY:
+                    prof["lattes"] = srv["lattes_url"]
+                    changed = True
+                # Atualiza unidade com dados reais do servidor
+                if (not prof.get("unidade") or prof["unidade"] == EMPTY) and srv.get("lotacao"):
+                    prof["unidade"] = srv["lotacao"]
+                    changed = True
+
+        if changed:
+            enriched += 1
+            # Reconstrói embedding_text para incluir Lattes
+            profs_texto = "\n".join(
+                f"  - {p['nome']}"
+                + (f" ({p.get('unidade', '')})" if p.get("unidade") and p["unidade"] != EMPTY else "")
+                + (f" | Lattes: {p['lattes']}" if p.get("lattes") else "")
+                for p in profs
+                if p.get("nome") and p["nome"] != EMPTY
+            )
+            # Substitui apenas a seção de professores no embedding_text existente
+            import re as _re
+            old_text = page.get("embedding_text", "")
+            new_section = f"Professores e docentes do curso:\n{profs_texto}"
+            updated = _re.sub(
+                r"Professores e docentes do curso:.*?(?=\n\n[A-Z]|\Z)",
+                new_section,
+                old_text,
+                flags=_re.DOTALL,
+            )
+            page["embedding_text"] = updated if updated != old_text else old_text
+
+    if enriched:
+        print(f"[Enrich] {enriched} curso(s) com professores enriquecidos com Lattes.")
+    return pages
+
+
 def pages_to_documents(pages: list[dict]) -> list[Document]:
     """
     Converte os dicionários do JSON em LangChain Documents.
 
+    Suporta dois schemas:
+      - Novo (crawl_ufpel.py async): campos id, tipo, titulo, embedding_text,
+        metadata.url, metadata.crawled_at, dados_completos
+      - Legado (crawl BFS antigo): campos url, title, text, tipo, depth, crawled_at
+
     Metadados preservados por chunk:
-      source      → URL da página (rastreabilidade)
-      title       → título HTML da página
-      depth       → profundidade no grafo de links
-      crawled_at  → timestamp ISO 8601 da coleta
-      categoria   → rótulo fixo para facilitar filtragem
-      tipo        → 'projeto', 'disciplina' ou ausente (portal geral)
+      source      → URL da página
+      title       → título do registro
+      doc_id      → UUID do documento (novo schema) para busca por dados_completos
+      crawled_at  → timestamp ISO 8601
+      categoria   → rótulo fixo para filtragem
+      tipo        → seção (curso, disciplina, projeto, etc.)
     """
     pages = _deduplicate_servidores(pages)
-    docs = []
+    pages = _enrich_curso_professores(pages)
+    docs    = []
     skipped = 0
+
     for page in pages:
-        text = (page.get("text") or "").strip()
+        # ── Detecta schema ────────────────────────────────────────────────────
+        is_new_schema = "embedding_text" in page
+
+        if is_new_schema:
+            text       = (page.get("embedding_text") or "").strip()
+            raw_title  = page.get("titulo", "Sem título")
+            url        = page.get("metadata", {}).get("url", "")
+            crawled_at = page.get("metadata", {}).get("crawled_at", "")
+            doc_id     = page.get("id", "")
+            tipo       = page.get("tipo", "portal_geral")
+            # metadados extras vindos do novo schema (filtráveis por coleção)
+            extra_meta = {k: v for k, v in page.get("metadata", {}).items()
+                          if k not in ("url", "crawled_at")}
+        else:
+            text       = (page.get("text") or "").strip()
+            raw_title  = page.get("title", "Sem título")
+            url        = page.get("url", "")
+            crawled_at = page.get("crawled_at", "")
+            doc_id     = ""
+            tipo       = page.get("tipo", "portal_geral")
+            extra_meta = {}
+
         if not text:
             skipped += 1
             continue
-        raw_title = page.get("title", "Sem título")
+
         titulo = raw_title.split(" | ")[0].strip()
-        metadata = {
-            "source":     page["url"],
+
+        metadata: dict = {
+            "source":     url,
             "title":      raw_title,
             "titulo":     titulo,
-            "depth":      page.get("depth", 0),
-            "crawled_at": page.get("crawled_at", ""),
+            "crawled_at": crawled_at,
             "categoria":  "portal_institucional",
+            "tipo":       tipo,
+            **extra_meta,
         }
-        if page.get("tipo"):
-            metadata["tipo"] = page["tipo"]
+        if doc_id:
+            metadata["doc_id"] = doc_id
+
         docs.append(Document(page_content=text, metadata=metadata))
 
     print(f"[Ingestão] {len(docs)} documento(s) válidos "
           f"({skipped} ignorados por texto vazio)")
     return docs
+
+
+# =============================================================================
+# Tabela de documentos completos (dados_completos para contexto LLM)
+# =============================================================================
+
+def ensure_dados_completos_table() -> None:
+    """Cria a tabela doc_completos se não existir — armazena dados_completos por doc_id."""
+    conn = psycopg2.connect(**config.DB_CONFIG)
+    conn.autocommit = True
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS doc_completos (
+                doc_id  TEXT PRIMARY KEY,
+                tipo    TEXT,
+                titulo  TEXT,
+                dados   JSONB
+            )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS doc_completos_tipo_idx ON doc_completos (tipo)")
+        # Índice GIN para busca rápida por título (trigram)
+        cur.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS doc_completos_titulo_trgm
+                ON doc_completos USING gin (titulo gin_trgm_ops)
+        """)
+    finally:
+        cur.close()
+        conn.close()
+
+
+def store_dados_completos(pages: list[dict]) -> int:
+    """
+    Insere/atualiza dados_completos de cada página na tabela doc_completos.
+    Retorna o número de registros inseridos/atualizados.
+    """
+    import json as _json
+
+    rows = []
+    for p in pages:
+        if not p.get("id") or not p.get("dados_completos"):
+            continue
+        dc = dict(p["dados_completos"])
+        # Inclui URL de origem para permitir links nas respostas do chatbot
+        meta_url = (p.get("metadata") or {}).get("url", "")
+        if meta_url and not dc.get("url"):
+            dc["url"] = meta_url
+        rows.append((
+            p.get("id", ""),
+            p.get("tipo", "portal_geral"),
+            p.get("titulo", ""),
+            _json.dumps(dc, ensure_ascii=False),
+        ))
+    if not rows:
+        return 0
+
+    conn = psycopg2.connect(**config.DB_CONFIG)
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                execute_values(
+                    cur,
+                    """
+                    INSERT INTO doc_completos (doc_id, tipo, titulo, dados)
+                    VALUES %s
+                    ON CONFLICT (doc_id) DO UPDATE
+                        SET tipo   = EXCLUDED.tipo,
+                            titulo = EXCLUDED.titulo,
+                            dados  = EXCLUDED.dados
+                    """,
+                    rows,
+                )
+    finally:
+        conn.close()
+    return len(rows)
+
+
+def fetch_dados_completos(doc_ids: list[str]) -> dict[str, dict]:
+    """
+    Retorna {doc_id: dados_completos} para os IDs solicitados.
+    Usado pelo pipeline RAG para enriquecer o contexto do LLM.
+    """
+    if not doc_ids:
+        return {}
+    conn = psycopg2.connect(**config.DB_CONFIG)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT doc_id, dados FROM doc_completos WHERE doc_id = ANY(%s)",
+                (doc_ids,),
+            )
+            return {row[0]: row[1] for row in cur.fetchall()}
+    finally:
+        conn.close()
+
+
+def lookup_by_title(
+    query: str,
+    tipo: str | None = None,
+    top_k: int = 3,
+    similarity_threshold: float = 0.3,
+) -> list[dict]:
+    """
+    Busca direta por similaridade de título em doc_completos (pg_trgm).
+
+    Usado como shortcut quando a query menciona um nome específico — evita
+    embedding + busca vetorial para perguntas como 'O que o professor X faz?'
+    ou 'Qual a ementa da disciplina Y?'.
+
+    Retorna lista de {'doc_id', 'tipo', 'titulo', 'dados', 'similarity'}.
+    """
+    conn = psycopg2.connect(**config.DB_CONFIG)
+    try:
+        with conn.cursor() as cur:
+            # Usa o operador % (trigrama) em vez de similarity() > threshold,
+            # permitindo que o planner use o índice GIN (169ms → ~25ms).
+            cur.execute(f"SET pg_trgm.similarity_threshold = {similarity_threshold}")
+            if tipo:
+                cur.execute(
+                    """
+                    SELECT doc_id, tipo, titulo, dados,
+                           similarity(titulo, %s) AS sim
+                    FROM doc_completos
+                    WHERE tipo = %s
+                      AND titulo %% %s
+                    ORDER BY sim DESC
+                    LIMIT %s
+                    """,
+                    (query, tipo, query, top_k),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT doc_id, tipo, titulo, dados,
+                           similarity(titulo, %s) AS sim
+                    FROM doc_completos
+                    WHERE titulo %% %s
+                    ORDER BY sim DESC
+                    LIMIT %s
+                    """,
+                    (query, query, top_k),
+                )
+            rows = cur.fetchall()
+            return [
+                {"doc_id": r[0], "tipo": r[1], "titulo": r[2],
+                 "dados": r[3], "similarity": float(r[4])}
+                for r in rows
+            ]
+    finally:
+        conn.close()
 
 
 # =============================================================================
@@ -213,7 +470,7 @@ def ensure_tables_exist() -> None:
                     ON {table} USING hnsw (embedding vector_cosine_ops)
             """)
 
-        print(f"[Tabelas] {len(TIPO_TO_TABLE)} tabelas por tipo verificadas/criadas "
+        print(f"[Tabelas] {len(TIPO_TO_TABLE)} tabelas verificadas/criadas "
               f"(dims={config.EMBEDDING_DIMS}).")
     finally:
         cur.close()
@@ -413,8 +670,9 @@ def ingest_segmented(
     """
     from collections import defaultdict
 
-    # 1. Garante existência das tabelas físicas
+    # 1. Garante existência das tabelas físicas e da tabela de dados completos
     ensure_tables_exist()
+    ensure_dados_completos_table()
 
     # 2. Agrupa por tipo
     by_tipo: dict[str, list[Document]] = defaultdict(list)
@@ -554,6 +812,13 @@ def main() -> None:
     args = _build_parser().parse_args()
 
     pages = load_crawled_data(args.input)
+
+    # Persiste dados_completos no banco (novo schema) para enriquecer contexto RAG
+    ensure_dados_completos_table()
+    n_stored = store_dados_completos(pages)
+    if n_stored:
+        print(f"[Ingestão] {n_stored} dados_completos armazenados na tabela doc_completos.")
+
     documents = pages_to_documents(pages)
 
     if not documents:

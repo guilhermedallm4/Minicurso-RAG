@@ -185,6 +185,20 @@ CREATE TABLE IF NOT EXISTS cursos (
     embedding VECTOR(1024)
 );
 
+-- ── Tabela por tipo — gestao ────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS gestao (
+    id        BIGSERIAL PRIMARY KEY,
+    conteudo  TEXT,
+    embedding VECTOR(1024)
+);
+
+-- ── Tabela por tipo — sobre ──────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS sobre (
+    id        BIGSERIAL PRIMARY KEY,
+    conteudo  TEXT,
+    embedding VECTOR(1024)
+);
+
 -- ── Tabela por tipo — portal_geral ───────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS portal_geral (
     id        BIGSERIAL PRIMARY KEY,
@@ -213,11 +227,17 @@ CREATE INDEX IF NOT EXISTS unidades_embedding_hnsw
 CREATE INDEX IF NOT EXISTS cursos_embedding_hnsw
     ON cursos      USING hnsw (embedding vector_cosine_ops);
 
+CREATE INDEX IF NOT EXISTS gestao_embedding_hnsw
+    ON gestao      USING hnsw (embedding vector_cosine_ops);
+
+CREATE INDEX IF NOT EXISTS sobre_embedding_hnsw
+    ON sobre       USING hnsw (embedding vector_cosine_ops);
+
 CREATE INDEX IF NOT EXISTS portal_geral_embedding_hnsw
     ON portal_geral USING hnsw (embedding vector_cosine_ops);
 SQL
 
-echo "      OK — tabelas por tipo (disciplinas, projetos, servidores, unidades, cursos, portal_geral) e indices HNSW criados"
+echo "      OK — tabelas por tipo (disciplinas, projetos, servidores, unidades, cursos, gestao, sobre, portal_geral) e indices HNSW criados"
 
 # ==============================================================================
 # PASSO 4: pgAdmin — Registrar servidor (instruções manuais)
@@ -351,7 +371,7 @@ try:
     print(f"  [OK]    PostgreSQL + pgvector {row[0] if row else '(ativo)'}")
 
     tabelas = ['documentos', 'disciplinas', 'projetos', 'servidores',
-               'unidades', 'cursos', 'portal_geral']
+               'unidades', 'cursos', 'gestao', 'sobre', 'portal_geral']
     cur.execute("""
         SELECT tablename FROM pg_tables
         WHERE schemaname='public' AND tablename = ANY(%s);

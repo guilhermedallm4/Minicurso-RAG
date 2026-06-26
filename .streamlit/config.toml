@@ -1,0 +1,14 @@
+[theme]
+# H2IA — Hub de Inovação em Inteligência Artificial / UFPel
+base                     = "light"
+primaryColor             = "#7B2FBE"   # roxo médio — botões, links, toggles ativos
+backgroundColor          = "#FFFFFF"   # branco puro — área do chat
+secondaryBackgroundColor = "#F8F5FC"   # lavanda muito claro — sidebar e inputs
+textColor                = "#1E0A3C"   # roxo quase-preto — texto principal
+
+[server]
+headless         = true
+enableCORS       = false
+
+[browser]
+gatherUsageStats = false

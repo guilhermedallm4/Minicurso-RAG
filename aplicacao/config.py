@@ -59,6 +59,8 @@ COLLECTION_MAP: dict[str, str] = {
     "servidor":     "ufpel_servidores",
     "unidade":      "ufpel_unidades",
     "curso":        "ufpel_cursos",
+    "gestao":       "ufpel_gestao",
+    "sobre":        "ufpel_sobre",
     "portal_geral": "ufpel_portal_geral",
 }
 
@@ -85,6 +87,14 @@ COLLECTION_DESCRIPTIONS: dict[str, str] = {
         "cursos de graduação e pós-graduação: duração, turno, vagas, "
         "grade curricular, coordenação"
     ),
+    "ufpel_gestao": (
+        "estrutura de gestão institucional: Reitoria, Vice-Reitoria, "
+        "Pró-Reitorias, Direções, Coordenações, organogramas e contatos"
+    ),
+    "ufpel_sobre": (
+        "informações sobre a UFPel: história, missão, visão, valores, "
+        "estrutura institucional e dados gerais da universidade"
+    ),
     "ufpel_portal_geral": (
         "informações institucionais gerais que não se encaixam nas "
         "categorias acima (editais, notícias, eventos, etc.)"
@@ -104,3 +114,22 @@ def collection_for_tipo(tipo: str) -> str:
 
 CHUNK_SIZE    = 500
 CHUNK_OVERLAP = 50
+
+# =============================================================================
+# RAG — Parâmetros de retrieval e geração
+# =============================================================================
+
+# Candidatos recuperados antes de reranking (deve ser >= RAG_TOP_K_FINAL)
+RAG_TOP_K_RETRIEVE: int = 10
+
+# Documentos enviados ao LLM para síntese (mínimo recomendado: 4)
+# Aumente para cobrir mais resultados; diminua para reduzir custo de tokens.
+RAG_TOP_K_FINAL: int = 4
+
+# Máximo de caracteres por documento no contexto do LLM
+# Valores menores reduzem custo; valores maiores preservam mais contexto.
+RAG_MAX_CHARS_PER_DOC: int = 1500
+
+# Limiar mínimo de relevância para aceitar um resultado (0–1, cosine)
+# Abaixo disso o pipeline tenta fallback multi-coleção.
+RAG_RELEVANCE_THRESHOLD: float = 0.20
