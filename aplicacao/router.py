@@ -147,11 +147,15 @@ def search_all_collections(
     Busca em todas as coleções UFPel e retorna os `top_k` resultados
     mais relevantes globalmente.
 
-    Cada coleção contribui com até 2 candidatos; o ranking final é por
-    score de relevância (cosseno) decrescente.
+    Cada coleção contribui com candidatos proporcionais a top_k; o ranking
+    final é por score de relevância (cosseno) decrescente.
     """
     emb = embeddings or get_embeddings()
     all_results: list[tuple] = []
+
+    # Cada coleção contribui com candidatos suficientes para preencher top_k
+    # mesmo que uma única coleção domine o ranking (mínimo 2 por coleção).
+    per_collection_k = max(2, -(-top_k // max(1, len(config.ALL_COLLECTIONS))) + 1)
 
     for collection_name in config.ALL_COLLECTIONS:
         try:
@@ -161,7 +165,7 @@ def search_all_collections(
                 embedding_function=emb,
                 use_jsonb=True,
             )
-            results = store.similarity_search_with_relevance_scores(query, k=2)
+            results = store.similarity_search_with_relevance_scores(query, k=per_collection_k)
             all_results.extend(results)
         except Exception as exc:
             print(f"[Router] Erro em '{collection_name}': {exc}")

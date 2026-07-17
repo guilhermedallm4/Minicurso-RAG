@@ -408,6 +408,197 @@ def lookup_by_title(
 
 
 # =============================================================================
+# Tabelas estruturadas por tipo (*_info) — colunas reais de dados_completos
+# =============================================================================
+# Permitem responder com UM SQL a perguntas como:
+#   SELECT * FROM disciplinas_info WHERE nome % 'Aprendizado de Máquina';
+# e juntar com os chunks vetoriais via doc_id.
+
+INFO_TABLES: dict[str, dict] = {
+    "disciplina": {
+        "table": "disciplinas_info",
+        "name_col": "nome",
+        "columns": {
+            "codigo": "TEXT", "nome": "TEXT", "tipo_atividade": "TEXT",
+            "periodicidade": "TEXT", "creditos": "TEXT", "carga_horaria": "TEXT",
+            "ch_teorica": "TEXT", "ch_pratica": "TEXT", "ch_obrigatoria": "TEXT",
+            "freq_aprovacao": "TEXT", "unidade_responsavel": "TEXT",
+            "ementa": "TEXT", "objetivos": "TEXT", "conteudo_programatico": "TEXT",
+            "bibliografia": "TEXT", "turmas_ofertadas": "JSONB",
+            "cursos_relacionados": "JSONB",
+        },
+    },
+    "projeto": {
+        "table": "projetos_info",
+        "name_col": "titulo",
+        "columns": {
+            "titulo": "TEXT", "resumo": "TEXT", "enfase": "TEXT",
+            "data_inicio": "TEXT", "data_fim": "TEXT", "situacao": "TEXT",
+            "coordenador": "TEXT", "unidade_origem": "TEXT", "area_cnpq": "TEXT",
+            "eixo_tematico": "TEXT", "linha_extensao": "TEXT",
+            "informacoes": "JSONB", "equipe_vigente": "JSONB",
+            "financeiro": "JSONB", "professores_relacionados": "JSONB",
+        },
+    },
+    "servidor": {
+        "table": "servidores_info",
+        "name_col": "nome",
+        "columns": {
+            "nome": "TEXT", "matricula_siape": "TEXT", "categoria": "TEXT",
+            "cargo": "TEXT", "classe_nivel": "TEXT", "titulacao": "TEXT",
+            "lotacao": "TEXT", "regime_jornada": "TEXT", "situacao": "TEXT",
+            "data_ingresso_servico": "TEXT", "data_ingresso_ufpel": "TEXT",
+            "data_ingresso_cargo": "TEXT", "email": "TEXT",
+            "curriculo_resumo": "TEXT", "formacao_academica": "JSONB",
+            "areas_atuacao": "JSONB", "lattes_url": "TEXT",
+            "projetos_ativos": "JSONB", "disciplinas_ministradas": "JSONB",
+            "cursos_relacionados": "JSONB",
+        },
+    },
+    "curso": {
+        "table": "cursos_info",
+        "name_col": "nome",
+        "columns": {
+            "nome": "TEXT", "codigo_ufpel": "TEXT", "nivel": "TEXT",
+            "grau": "TEXT", "modalidade": "TEXT", "turno": "TEXT",
+            "codigo_emec": "TEXT", "codigo_capes": "TEXT", "unidade": "TEXT",
+            "programa": "TEXT", "coordenador": "TEXT",
+            "criacao_reconhecimento": "TEXT", "informacoes": "JSONB",
+            "matriz_curricular": "JSONB", "professores": "JSONB",
+            "turmas_ofertadas": "JSONB", "conceitos_curso": "JSONB",
+            "formas_ingresso": "JSONB", "vagas_por_ingresso": "JSONB",
+        },
+    },
+}
+
+
+def ensure_info_tables() -> None:
+    """Cria as tabelas estruturadas *_info (idempotente) com índice trigram no nome."""
+    conn = psycopg2.connect(**config.DB_CONFIG)
+    conn.autocommit = True
+    cur = conn.cursor()
+    try:
+        cur.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
+        for spec in INFO_TABLES.values():
+            table = spec["table"]
+            cols_sql = ",\n                ".join(
+                f"{col} {sqltype}" for col, sqltype in spec["columns"].items()
+            )
+            cur.execute(f"""
+                CREATE TABLE IF NOT EXISTS {table} (
+                    doc_id TEXT PRIMARY KEY,
+                    {cols_sql},
+                    url    TEXT
+                )
+            """)
+            cur.execute(f"""
+                CREATE INDEX IF NOT EXISTS {table}_{spec['name_col']}_trgm
+                    ON {table} USING gin ({spec['name_col']} gin_trgm_ops)
+            """)
+        print(f"[Tabelas] {len(INFO_TABLES)} tabelas estruturadas (*_info) verificadas/criadas.")
+    finally:
+        cur.close()
+        conn.close()
+
+
+def store_info_tables(pages: list[dict]) -> int:
+    """
+    Popula as tabelas *_info a partir de dados_completos (upsert por doc_id).
+    Colunas JSONB recebem listas/dicts serializados; TEXT recebe o valor cru.
+    Retorna o total de registros inseridos/atualizados.
+    """
+    import json as _json
+
+    by_tipo: dict[str, list[tuple]] = {}
+    for p in pages:
+        tipo = p.get("tipo", "")
+        spec = INFO_TABLES.get(tipo)
+        if not spec or not p.get("id") or not p.get("dados_completos"):
+            continue
+        dc  = p["dados_completos"]
+        url = (p.get("metadata") or {}).get("url", "")
+        row = [p["id"]]
+        for col, sqltype in spec["columns"].items():
+            val = dc.get(col)
+            if sqltype == "JSONB":
+                row.append(_json.dumps(val, ensure_ascii=False) if val is not None else None)
+            else:
+                row.append(val)
+        row.append(url)
+        by_tipo.setdefault(tipo, []).append(tuple(row))
+
+    if not by_tipo:
+        return 0
+
+    total = 0
+    conn = psycopg2.connect(**config.DB_CONFIG)
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                for tipo, rows in by_tipo.items():
+                    spec = INFO_TABLES[tipo]
+                    cols = ["doc_id"] + list(spec["columns"].keys()) + ["url"]
+                    updates = ", ".join(
+                        f"{c} = EXCLUDED.{c}" for c in cols if c != "doc_id"
+                    )
+                    execute_values(
+                        cur,
+                        f"""
+                        INSERT INTO {spec['table']} ({', '.join(cols)})
+                        VALUES %s
+                        ON CONFLICT (doc_id) DO UPDATE SET {updates}
+                        """,
+                        rows,
+                    )
+                    total += len(rows)
+    finally:
+        conn.close()
+    return total
+
+
+def lookup_registro(
+    tipo: str,
+    nome: str,
+    top_k: int = 3,
+    similarity_threshold: float = 0.3,
+) -> list[dict]:
+    """
+    Busca registros estruturados na tabela *_info do tipo pelo nome (pg_trgm).
+
+    Exemplo: lookup_registro('disciplina', 'Aprendizado de Máquina') retorna
+    todas as colunas estruturadas da disciplina (ementa, créditos, turmas, etc.)
+    prontas para compor o contexto do LLM.
+    """
+    spec = INFO_TABLES.get(tipo)
+    if spec is None:
+        return []
+    table, name_col = spec["table"], spec["name_col"]
+    cols = ["doc_id"] + list(spec["columns"].keys()) + ["url"]
+
+    conn = psycopg2.connect(**config.DB_CONFIG)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f"SET pg_trgm.similarity_threshold = {similarity_threshold}")
+            cur.execute(
+                f"""
+                SELECT {', '.join(cols)}, similarity({name_col}, %s) AS sim
+                FROM {table}
+                WHERE {name_col} %% %s
+                ORDER BY sim DESC
+                LIMIT %s
+                """,
+                (nome, nome, top_k),
+            )
+            rows = cur.fetchall()
+            return [
+                {**dict(zip(cols, r[:-1])), "similarity": float(r[-1])}
+                for r in rows
+            ]
+    finally:
+        conn.close()
+
+
+# =============================================================================
 # Criação das tabelas físicas por tipo
 # =============================================================================
 
@@ -440,13 +631,16 @@ def ensure_tables_exist() -> None:
     - Se existe com dimensão correta: não faz nada (idempotente).
 
     Tabelas gerenciadas: disciplinas, projetos, servidores, unidades, cursos, portal_geral
-    Cada tabela:  id BIGSERIAL PK | conteudo TEXT | embedding VECTOR({EMBEDDING_DIMS})
+    Cada tabela:  id BIGSERIAL PK | doc_id TEXT | titulo TEXT | conteudo TEXT
+                  | embedding VECTOR({EMBEDDING_DIMS})
+    doc_id liga cada chunk ao registro estruturado (*_info / doc_completos).
     """
     conn = psycopg2.connect(**config.DB_CONFIG)
     conn.autocommit = True
     cur = conn.cursor()
     try:
         cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
+        cur.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm;")
 
         for table in TIPO_TO_TABLE.values():
             existing_dim = _get_table_vector_dim(cur, table)
@@ -460,14 +654,25 @@ def ensure_tables_exist() -> None:
                 cur.execute(f"""
                     CREATE TABLE {table} (
                         id        BIGSERIAL PRIMARY KEY,
+                        doc_id    TEXT,
+                        titulo    TEXT,
                         conteudo  TEXT       NOT NULL,
                         embedding VECTOR({config.EMBEDDING_DIMS})
                     )
                 """)
+            else:
+                # Tabela pré-existente da versão antiga: adiciona colunas de ligação
+                cur.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS doc_id TEXT")
+                cur.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS titulo TEXT")
 
             cur.execute(f"""
                 CREATE INDEX IF NOT EXISTS {table}_embedding_hnsw
                     ON {table} USING hnsw (embedding vector_cosine_ops)
+            """)
+            cur.execute(f"CREATE INDEX IF NOT EXISTS {table}_doc_id_idx ON {table} (doc_id)")
+            cur.execute(f"""
+                CREATE INDEX IF NOT EXISTS {table}_titulo_trgm
+                    ON {table} USING gin (titulo gin_trgm_ops)
             """)
 
         print(f"[Tabelas] {len(TIPO_TO_TABLE)} tabelas verificadas/criadas "
@@ -475,6 +680,38 @@ def ensure_tables_exist() -> None:
     finally:
         cur.close()
         conn.close()
+
+
+# =============================================================================
+# Chunking por documento (1 doc = 1 chunk com o embedding_text inteiro)
+# =============================================================================
+
+# nv-embedqa-e5-v5 aceita no máximo 512 tokens (~2000 chars em português).
+# Textos maiores são truncados pela API (truncate="END") — o embedding
+# representa apenas o início do documento.
+NVEMBED_SAFE_CHARS = 2000
+
+
+def chunk_documents_whole(documents: list[Document]) -> list[Document]:
+    """
+    Modo 'documento': cada documento vira UM único chunk com o texto completo
+    (embedding_text inteiro), sem divisão por tamanho. Mantém cada registro
+    (disciplina, projeto, servidor, curso) íntegro no índice vetorial.
+    """
+    longos = sum(1 for d in documents if len(d.page_content) > NVEMBED_SAFE_CHARS)
+    print(f"[Chunking Documento] {len(documents)} doc(s) → {len(documents)} chunks "
+          f"(1 doc = 1 chunk, texto integral)")
+    if longos:
+        print(f"  [Aviso] {longos} doc(s) excedem ~{NVEMBED_SAFE_CHARS} chars "
+              f"(512 tokens do nv-embedqa-e5-v5) — o embedding será truncado no fim.")
+    return documents
+
+
+CHUNKING_STRATEGIES = {
+    "documento": chunk_documents_whole,
+    "semantico": chunk_documents_semantic,
+    "recursivo": chunk_documents,
+}
 
 
 # =============================================================================
@@ -501,24 +738,32 @@ def _insert_raw_batch(
     table: str,
     texts: list[str],
     vectors: list[list[float]],
+    metadatas: list[dict] | None = None,
 ) -> None:
     """
-    Insere um lote de (texto, vetor) diretamente na tabela física `table`.
+    Insere um lote de (texto, vetor) diretamente na tabela física `table`,
+    com doc_id e titulo dos metadados para ligação com as tabelas *_info.
     Usa execute_values para eficiência e o cast `::vector` para compatibilidade
     com pgvector sem depender do adaptador psycopg2 do pgvector.
     """
+    metadatas = metadatas or [{}] * len(texts)
     conn = psycopg2.connect(**config.DB_CONFIG)
     try:
         with conn:
             with conn.cursor() as cur:
                 execute_values(
                     cur,
-                    f"INSERT INTO {table} (conteudo, embedding) VALUES %s",
+                    f"INSERT INTO {table} (doc_id, titulo, conteudo, embedding) VALUES %s",
                     [
-                        (text, f"[{','.join(map(str, vec))}]")
-                        for text, vec in zip(texts, vectors)
+                        (
+                            meta.get("doc_id"),
+                            meta.get("titulo") or meta.get("title"),
+                            text,
+                            f"[{','.join(map(str, vec))}]",
+                        )
+                        for text, vec, meta in zip(texts, vectors, metadatas)
                     ],
-                    template="(%s, %s::vector)",
+                    template="(%s, %s, %s, %s::vector)",
                 )
     finally:
         conn.close()
@@ -627,7 +872,7 @@ def ingest_segmented(
     batch_size: int = INGEST_BATCH_SIZE,
     delay: float = INGEST_DELAY,
     max_per_tipo: int | None = None,
-    use_semantic_chunking: bool = True,
+    chunking: str = "documento",
 ) -> dict[str, int]:
     """
     Pipeline segmentada por tipo:
@@ -635,7 +880,7 @@ def ingest_segmented(
     1. Cria as tabelas físicas por tipo se não existirem (idempotente).
     2. Agrupa documentos pelo campo `tipo` dos metadados.
     3. Para cada grupo (limitado a `max_per_tipo` docs), processa em lotes:
-         a. Faz chunking (semântico ou recursivo)
+         a. Faz chunking ('documento' = texto integral, 'semantico' ou 'recursivo')
          b. Gera embeddings UMA vez (Google gemini-embedding-001).
          c. Insere na tabela física da categoria (SQL direto).
          d. Insere na coleção PGVector do LangChain (para o pipeline RAG).
@@ -648,10 +893,11 @@ def ingest_segmented(
       curso       → cursos       / ufpel_cursos
       (outros)    → portal_geral / ufpel_portal_geral
 
-    Chunking Semântico:
-      Se use_semantic_chunking=True, respeita estrutura de seções (Resumo:, Objetivos:, etc.)
-      mantendo conteúdo semanticamente coerente e adicionando metadados de seção.
-      Fallback para RecursiveCharacterTextSplitter se não houver estrutura clara.
+    Estratégias de chunking (param `chunking`):
+      'documento' (padrão) : 1 doc = 1 chunk com o embedding_text inteiro —
+                             cada registro fica íntegro no índice vetorial.
+      'semantico'          : respeita seções (Resumo:, Objetivos:, etc.) até CHUNK_SIZE.
+      'recursivo'          : RecursiveCharacterTextSplitter clássico.
 
     Limites free tier Google (gemini-embedding-001):
       ~1 chamada/min efetiva → use --max-por-tipo 200 --delay 62
@@ -663,16 +909,23 @@ def ingest_segmented(
         batch_size          : chunks por lote de embedding (padrão INGEST_BATCH_SIZE)
         delay               : segundos entre lotes (padrão INGEST_DELAY)
         max_per_tipo        : limite de documentos por tipo (None = sem limite)
-        use_semantic_chunking : se True, usa chunking semântico; senão, usa recursivo
+        chunking            : 'documento' | 'semantico' | 'recursivo'
 
     Returns:
         Dict {collection_name: número_de_documentos_inseridos}
     """
     from collections import defaultdict
 
+    chunk_fn = CHUNKING_STRATEGIES.get(chunking)
+    if chunk_fn is None:
+        raise ValueError(
+            f"Chunking '{chunking}' inválido. Use: {', '.join(CHUNKING_STRATEGIES)}"
+        )
+
     # 1. Garante existência das tabelas físicas e da tabela de dados completos
     ensure_tables_exist()
     ensure_dados_completos_table()
+    ensure_info_tables()
 
     # 2. Agrupa por tipo
     by_tipo: dict[str, list[Document]] = defaultdict(list)
@@ -698,13 +951,10 @@ def ingest_segmented(
         print(f"  Tabela    : {table}  |  Coleção: {col}")
         print(f"  Documentos: {len(docs)}"
               + (f" (de {len(by_tipo[tipo])} total)" if max_per_tipo else ""))
-        print(f"  Chunking  : {'semântico' if use_semantic_chunking else 'recursivo'}")
+        print(f"  Chunking  : {chunking}")
         print("=" * 62)
 
-        chunks = (
-            chunk_documents_semantic(docs) if use_semantic_chunking
-            else chunk_documents(docs)
-        )
+        chunks = chunk_fn(docs)
         total     = len(chunks)
         n_batches = max(1, (total + batch_size - 1) // batch_size)
         eta_min   = round(n_batches * delay / 60, 1)
@@ -736,7 +986,7 @@ def ingest_segmented(
             vectors = _embed_with_retry(embeddings_model, texts)
 
             # a) Tabela física por tipo (SQL direto — para demos e SQL puro)
-            _insert_raw_batch(table, texts, vectors)
+            _insert_raw_batch(table, texts, vectors, metadatas)
 
             # b) Coleção PGVector do LangChain (para o pipeline RAG / router)
             text_embeddings = list(zip(texts, vectors))
@@ -803,8 +1053,10 @@ def _build_parser() -> argparse.ArgumentParser:
                         "free tier: use 62)")
     p.add_argument("--all-in-one", action="store_true",
                    help="Insere tudo em uma única coleção (sem segmentação por tipo)")
-    p.add_argument("--chunking", choices=["semantico", "recursivo"], default="semantico",
-                   help="Estratégia de chunking (padrão: semantico)")
+    p.add_argument("--chunking", choices=["documento", "semantico", "recursivo"],
+                   default="documento",
+                   help="Estratégia de chunking (padrão: documento — "
+                        "1 doc = 1 chunk com o embedding_text inteiro)")
     return p
 
 
@@ -819,13 +1071,17 @@ def main() -> None:
     if n_stored:
         print(f"[Ingestão] {n_stored} dados_completos armazenados na tabela doc_completos.")
 
+    # Persiste as tabelas estruturadas por tipo (*_info) para consultas SQL diretas
+    ensure_info_tables()
+    n_info = store_info_tables(pages)
+    if n_info:
+        print(f"[Ingestão] {n_info} registros estruturados armazenados nas tabelas *_info.")
+
     documents = pages_to_documents(pages)
 
     if not documents:
         print("[Aviso] Nenhum documento válido. Verifique o arquivo JSON.")
         sys.exit(1)
-
-    use_semantic = args.chunking == "semantico"
 
     if args.all_in_one:
         ingest_to_pgvector(documents, reset=args.reset)
@@ -835,7 +1091,7 @@ def main() -> None:
             reset=args.reset,
             delay=args.delay,
             max_per_tipo=args.max_por_tipo,
-            use_semantic_chunking=use_semantic,
+            chunking=args.chunking,
         )
 
 

@@ -305,6 +305,12 @@ if "processing_lock" not in st.session_state:
 
 _GLOBAL_LOCK: threading.Lock = st.session_state.processing_lock
 
+# Identificador da sessão do aluno — usado pelo cache de paginação de
+# resultados ("fale outras disciplinas" continua a lista desta sessão).
+if "session_id" not in st.session_state:
+    import uuid
+    st.session_state.session_id = uuid.uuid4().hex
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Sidebar
 # ─────────────────────────────────────────────────────────────────────────────
@@ -420,7 +426,10 @@ if pergunta:
                         )
 
                         with record_request("rag_pipeline", context="answer_with_routing"):
-                            resposta = answer_with_routing(pergunta, rag_config=cfg)
+                            resposta = answer_with_routing(
+                                pergunta, rag_config=cfg,
+                                session_id=st.session_state.session_id,
+                            )
 
                         elapsed = time.perf_counter() - t_start
                         extras = f"{modo}{' · keywords' if usar_keywords else ''}"

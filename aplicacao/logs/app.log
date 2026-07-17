@@ -71,3 +71,48 @@
 2026-06-26 14:35:14 [INFO] reliability — [llm] OpenRouter: deepseek/deepseek-v4-flash
 2026-06-26 14:35:40 [WARNING] reliability — [llm] FALLBACK acionado — NVIDIA NIM: deepseek-ai/deepseek-v4-flash falhou → usando OpenRouter: deepseek/deepseek-v4-flash
 2026-06-26 14:35:40 [INFO] reliability — [llm] Novo provedor primário após fallback: OpenRouter: deepseek/deepseek-v4-flash
+2026-07-03 12:17:39 [INFO] reliability — [llm] NVIDIA NIM: deepseek-ai/deepseek-v4-pro
+2026-07-03 12:18:41 [WARNING] reliability — [llm] FALLBACK acionado — NVIDIA NIM: deepseek-ai/deepseek-v4-pro: APITimeoutError → usando NVIDIA NIM: deepseek-ai/deepseek-v4-flash
+2026-07-03 12:18:41 [INFO] reliability — [llm] NVIDIA NIM: deepseek-ai/deepseek-v4-flash
+2026-07-03 12:19:42 [WARNING] reliability — [llm] FALLBACK acionado — NVIDIA NIM: deepseek-ai/deepseek-v4-flash: APITimeoutError → usando OpenRouter: deepseek/deepseek-v4-flash
+2026-07-03 12:19:42 [INFO] reliability — [llm] OpenRouter: deepseek/deepseek-v4-flash
+2026-07-03 12:19:51 [WARNING] reliability — [llm] FALLBACK acionado — NVIDIA NIM: deepseek-ai/deepseek-v4-flash falhou → usando OpenRouter: deepseek/deepseek-v4-flash
+2026-07-03 12:19:51 [INFO] reliability — [llm] Novo provedor primário após fallback: OpenRouter: deepseek/deepseek-v4-flash
+2026-07-03 12:23:20 [INFO] reliability — [llm] OpenRouter: deepseek/deepseek-v4-flash
+2026-07-03 12:46:28 [INFO] reliability — [llm] OpenRouter: deepseek/deepseek-v4-flash
+2026-07-03 12:46:35 [INFO] reliability — [llm] OpenRouter: deepseek/deepseek-v4-flash
+2026-07-03 12:46:37 [WARNING] reliability — [embeddings] FALLBACK acionado — NVIDIA_API_KEY não configurada ou inválida
+2026-07-03 12:46:37 [ERROR] reliability — [rag_pipeline] FALHA — NVIDIA_API_KEY não configurada ou inválida. Defina NVIDIA_API_KEY no arquivo .env — obrigatório para embeddings. [ctx=vector_search:ufpel_portal_geral]
+2026-07-03 12:46:37 [WARNING] reliability — [rag_pipeline] FALLBACK acionado — busca vetorial falhou: NVIDIA_API_KEY não configurada ou inválida. Defina NVIDIA_API_KEY no arquivo .env — obrigatório para embeddings. → usando todas as coleções
+2026-07-03 12:46:37 [WARNING] reliability — [embeddings] FALLBACK acionado — NVIDIA_API_KEY não configurada ou inválida
+2026-07-03 12:46:37 [ERROR] reliability — [rag_pipeline] FALHA — NVIDIA_API_KEY não configurada ou inválida. Defina NVIDIA_API_KEY no arquivo .env — obrigatório para embeddings. [ctx=answer_with_routing]
+2026-07-03 12:46:37 [WARNING] reliability — [rag_pipeline] FALLBACK acionado — exceção não tratada: NVIDIA_API_KEY não configurada ou inválida. Defina NVIDIA_API_KEY no arquivo .env — obrigatório para embeddings.
+2026-07-03 15:39:23 [WARNING] reliability — [embeddings] FALLBACK acionado — NVIDIA_API_KEY não configurada ou inválida
+2026-07-17 10:54:40 [WARNING] reliability — [embeddings] FALLBACK acionado — NVIDIA_API_KEY não configurada ou inválida
+2026-07-17 12:46:22 [WARNING] reliability — [embeddings] FALLBACK acionado — NVIDIA_API_KEY não configurada ou inválida
+2026-07-17 13:06:05 [WARNING] reliability — [embeddings] FALLBACK acionado — NVIDIA_API_KEY não configurada ou inválida
+2026-07-17 13:16:09 [WARNING] reliability — [embeddings] FALLBACK acionado — NVIDIA_API_KEY não configurada ou inválida
+2026-07-17 13:18:19 [WARNING] reliability — [embeddings] FALLBACK acionado — NVIDIA_API_KEY não configurada ou inválida
+2026-07-17 13:22:22 [WARNING] reliability — [embeddings] FALLBACK acionado — NVIDIA_API_KEY não configurada ou inválida
+2026-07-17 13:23:04 [INFO] reliability — [embeddings] NVIDIA NIM: nvidia/nv-embedqa-e5-v5 (1024 dims)
+2026-07-17 13:31:42 [INFO] reliability — [embeddings] NVIDIA NIM: nvidia/nv-embedqa-e5-v5 (1024 dims)
+2026-07-17 13:50:38 [INFO] reliability — [embeddings] NVIDIA NIM: nvidia/nv-embedqa-e5-v5 (1024 dims)
+2026-07-17 14:11:57 [INFO] reliability — [llm] OpenRouter: deepseek/deepseek-v4-flash
+2026-07-17 14:12:01 [INFO] reliability — [embeddings] NVIDIA NIM: nvidia/nv-embedqa-e5-v5 (1024 dims)
+2026-07-17 14:12:02 [INFO] reliability — [llm] OpenRouter: deepseek/deepseek-v4-flash
+2026-07-17 14:12:40 [INFO] reliability — [llm] OpenRouter: deepseek/deepseek-v4-flash
+2026-07-17 14:12:45 [INFO] reliability — [embeddings] NVIDIA NIM: nvidia/nv-embedqa-e5-v5 (1024 dims)
+2026-07-17 14:12:45 [INFO] reliability — [llm] OpenRouter: deepseek/deepseek-v4-flash
+2026-07-17 14:12:53 [INFO] reliability — [llm] OpenRouter: deepseek/deepseek-v4-flash
+2026-07-17 14:13:20 [INFO] reliability — [llm] OpenRouter: deepseek/deepseek-v4-flash
+2026-07-17 14:17:16 [INFO] reliability — [llm] OpenRouter: deepseek/deepseek-v4-flash
+2026-07-17 14:17:20 [INFO] reliability — [embeddings] NVIDIA NIM: nvidia/nv-embedqa-e5-v5 (1024 dims)
+2026-07-17 14:17:21 [INFO] reliability — [llm] OpenRouter: deepseek/deepseek-v4-flash
+2026-07-17 14:18:11 [INFO] reliability — [llm] OpenRouter: deepseek/deepseek-v4-flash
+2026-07-17 14:19:29 [INFO] reliability — [llm] OpenRouter: deepseek/deepseek-v4-flash
+2026-07-17 14:20:19 [INFO] reliability — [llm] OpenRouter: deepseek/deepseek-v4-flash
+2026-07-17 14:20:29 [INFO] reliability — [llm] OpenRouter: deepseek/deepseek-v4-flash
+2026-07-17 14:21:16 [INFO] reliability — [llm] OpenRouter: deepseek/deepseek-v4-flash
+2026-07-17 14:21:18 [INFO] reliability — [llm] OpenRouter: deepseek/deepseek-v4-flash
+2026-07-17 14:21:55 [INFO] reliability — [llm] OpenRouter: deepseek/deepseek-v4-flash
+2026-07-17 14:21:59 [INFO] reliability — [llm] OpenRouter: deepseek/deepseek-v4-flash

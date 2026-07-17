@@ -168,7 +168,26 @@ def _merge_small_sections(
         chunk_text = "\n\n".join(s.text for s in current_chunk_sections)
         chunks.append(chunk_text)
 
-    return chunks
+    return _apply_overlap(chunks, config.SEMANTIC_CHUNK_OVERLAP)
+
+
+def _apply_overlap(chunks: List[str], overlap: int) -> List[str]:
+    """
+    Prefixa cada chunk (a partir do segundo) com o final do chunk anterior,
+    preservando continuidade da informação nas fronteiras entre chunks.
+    O corte é alinhado ao início de uma palavra para não quebrar termos.
+    """
+    if overlap <= 0 or len(chunks) < 2:
+        return chunks
+
+    result = [chunks[0]]
+    for prev, cur in zip(chunks, chunks[1:]):
+        tail = prev[-overlap:]
+        space = tail.find(" ")
+        if 0 <= space < len(tail) - 1:
+            tail = tail[space + 1:]
+        result.append(f"{tail.strip()}\n{cur}" if tail.strip() else cur)
+    return result
 
 
 def chunk_documents_semantic(documents: List[Document]) -> List[Document]:
@@ -223,7 +242,8 @@ def chunk_documents_semantic(documents: List[Document]) -> List[Document]:
             chunks.extend(sub_chunks)
 
     print(f"[Chunking Semântico] {len(documents)} doc(s) → {len(chunks)} chunks "
-          f"(min_estruturado=100, max={config.CHUNK_SIZE})")
+          f"(min_estruturado=100, max={config.CHUNK_SIZE}, "
+          f"overlap={config.SEMANTIC_CHUNK_OVERLAP})")
     return chunks
 
 

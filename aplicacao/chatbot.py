@@ -88,7 +88,7 @@ def run_chatbot():
             continue
 
         print("\nAssistente:", end=" ", flush=True)
-        response = answer_with_routing(query, rag_config=cfg)
+        response = answer_with_routing(query, rag_config=cfg, session_id="cli")
         print(response, "\n")
 
 

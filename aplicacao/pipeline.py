@@ -25,6 +25,7 @@ RAGConfig (módulos avançados):
   Habilita busca híbrida, reranking e guardrails de forma composicional.
   Cada feature é opcional e pode ser ligada/desligada sem alterar o restante.
 """
+import re
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
@@ -322,6 +323,21 @@ def _format_docs(docs: List[Document], max_chars_per_doc: int = 0) -> str:
 
         doc_id = d.metadata.get("doc_id", "")
         dados_completos = dados_map.get(doc_id)
+
+        # Fallback: chunk sem doc_id (ou sem registro) — busca o registro
+        # estruturado pelo título (pg_trgm), anexando ementa/créditos/equipe etc.
+        if dados_completos is None and titulo:
+            try:
+                m = _lookup_by_title(
+                    titulo, tipo=d.metadata.get("tipo"),
+                    top_k=1, similarity_threshold=0.45,
+                )
+                if m:
+                    dados_completos = m[0]["dados"]
+                    doc_id = doc_id or m[0]["doc_id"]
+            except Exception:
+                pass
+
         if dados_completos and doc_id not in seen_doc_ids:
             seen_doc_ids.add(doc_id)
             # Serializa de forma legível para o LLM
@@ -1005,24 +1021,135 @@ def _try_direct_lookup(query: str, cfg: "RAGConfig") -> Optional[str]:
     return f"{response}{suffix}"
 
 
+# =============================================================================
+# Paginação de resultados ("fale outras disciplinas")
+# =============================================================================
+
+# Detecta pedidos de continuação da última listagem. Só tem efeito quando a
+# sessão possui uma lista pendente no cache (conversation_state.py); caso
+# contrário a query segue o fluxo normal de RAG.
+_CONTINUATION_RE = re.compile(
+    r"\b(?:outr[ao]s|demais|restantes?|seguintes|pr[óo]xim[ao]s"
+    r"|continue|continuar|continua[çc][ãa]o|prossiga"
+    r"|(?:fale|liste|mostre|cite|apresente|traga|quero)\s+mais"
+    r"|mais\s+(?:disciplinas?|projetos?|professores?|cursos?|servidor(?:es)?"
+    r"|resultados?|itens?|op[çc][õo]es))\b",
+    re.IGNORECASE,
+)
+
+
+def _is_continuation_query(query: str) -> bool:
+    """True para pedidos curtos de continuação ('fale outras disciplinas')."""
+    q = query.strip()
+    if len(q.split()) > 10:
+        return False
+    if re.fullmatch(r"(?:tem\s+)?mais\s*\??", q, re.IGNORECASE):
+        return True
+    return bool(_CONTINUATION_RE.search(q))
+
+
+def _pagination_footer(remaining: int) -> str:
+    """Rodapé informando quantos resultados ainda há na lista da sessão."""
+    if remaining > 0:
+        return (f"\n\n📚 *Há mais {remaining} resultado(s) relacionados. "
+                f'Diga "fale outras disciplinas" (ou "mostre mais") para continuar a lista.*')
+    return "\n\n✅ *Fim da lista — todos os resultados relacionados foram apresentados.*"
+
+
+def _paginate_and_synthesize(
+    query: str,
+    results: List[Tuple],
+    keywords: List[str],
+    cfg: RAGConfig,
+    collection_name: Optional[str],
+    session_id: str,
+) -> str:
+    """
+    Envia só os top_k_final docs ao LLM; o restante fica no cache de sessão
+    para continuação sequencial. Retorna a resposta com rodapé de paginação.
+    """
+    from conversation_state import pagination_store
+
+    page_size = max(cfg.top_k_final, config.RAG_TOP_K_FINAL)
+    page      = results[:page_size]
+    leftover  = len(results) - len(page)
+
+    response = _synthesize_from_results(query, page, keywords, cfg,
+                                        collection_name=collection_name)
+
+    if leftover > 0:
+        pagination_store.save(
+            session_id, query=query, collection=collection_name,
+            items=results, offset=len(page),
+        )
+        print(f"[Paginação] {len(results)} resultados: {len(page)} enviados ao LLM, "
+              f"{leftover} guardados na sessão '{session_id}'")
+        return response + _pagination_footer(leftover)
+
+    pagination_store.clear(session_id)
+    return response
+
+
+def _answer_continuation(query: str, cfg: RAGConfig, session_id: str) -> Optional[str]:
+    """
+    Continua a listagem pendente da sessão a partir do cache (sem nova busca
+    vetorial). Retorna None se não há lista pendente — segue o fluxo normal.
+    """
+    from conversation_state import pagination_store
+
+    page_size = max(cfg.top_k_final, config.RAG_TOP_K_FINAL)
+    nxt = pagination_store.next_page(session_id, n=page_size)
+    if nxt is None:
+        return None
+
+    page, remaining, orig_query, collection = nxt
+    if not page:
+        pagination_store.clear(session_id)
+        return ("✅ Todos os resultados da última busca já foram apresentados. "
+                "Faça uma nova pergunta para começar outra lista.")
+
+    print(f"[Paginação] Continuação: {len(page)} itens do cache "
+          f"({remaining} restando) — sem nova busca vetorial")
+
+    cont_query = (
+        f"{orig_query}\n\n"
+        "(Continuação da listagem anterior: apresente TODOS os itens do "
+        "contexto — são os próximos da lista, ainda não mostrados ao usuário.)"
+    )
+    response = _synthesize_from_results(cont_query, page, [orig_query], cfg,
+                                        collection_name=collection)
+    return response + _pagination_footer(remaining)
+
+
 def answer_with_routing(
     query: str,
     rag_config: Optional[RAGConfig] = None,
     collection_name: Optional[str] = None,
+    session_id: str = "default",
 ) -> str:
     """
     Pipeline RAG com roteamento automático de coleção.
 
     Fluxo:
-      [input guard] → LLM router → coleção alvo → validação de relevância
-          → [score baixo? tenta fallback multi-coleção] → LLM → [output guard]
+      [continuação de lista?] → [input guard] → LLM router → coleção alvo
+          → validação de relevância → [score baixo? fallback multi-coleção]
+          → top_k_final docs ao LLM (restante em cache de sessão) → [output guard]
 
     Args:
         query           : pergunta do usuário
         rag_config      : configurações avançadas (híbrido, reranker, guardrails)
         collection_name : força uma coleção específica (ignora router)
+        session_id      : identifica a sessão do aluno (paginação de resultados)
     """
     cfg = rag_config or RAGConfig()
+
+    # --- Continuação de listagem ("fale outras disciplinas") -------------------
+    # Antes do cache de respostas: cada pedido de continuação avança a lista,
+    # então a resposta muda a cada chamada e não pode ser cacheada.
+    if _is_continuation_query(query):
+        cont = _answer_continuation(query, cfg, session_id)
+        if cont is not None:
+            return cont
 
     # --- Cache de respostas ---------------------------------------------------
     # Nível 1 (exact): hash SHA-256 da query normalizada — O(1).
@@ -1092,27 +1219,32 @@ def answer_with_routing(
 
     # Mínimo de docs a enviar ao LLM (garante cobertura mínima)
     top_k = max(cfg.top_k_final, config.RAG_TOP_K_FINAL)
+    # "Traga todos": recupera muito mais candidatos que o top_k enviado ao LLM;
+    # os relevantes excedentes ficam no cache de sessão para continuação.
+    fetch_k = max(config.RAG_FETCH_ALL_K, top_k)
 
     if target is None:
         # Roteador não conseguiu identificar coleção — fallback multi-coleção
         record_fallback("rag_pipeline", "roteador sem confiança suficiente", fallback_to="todas as coleções")
         with record_request("rag_pipeline", context="fallback_all_collections"):
-            results = search_all_collections(query, top_k=top_k)
-        if not results or max(s for _, s in results) < config.RAG_RELEVANCE_THRESHOLD:
+            results = search_all_collections(query, top_k=fetch_k)
+        relevant = [r for r in results if r[1] >= config.RAG_RELEVANCE_THRESHOLD]
+        if not relevant:
             return _NO_RESULTS_MSG
-        return _synthesize_from_results(query, results, keywords, cfg, collection_name=None)
+        return _paginate_and_synthesize(query, relevant, keywords, cfg,
+                                        collection_name=None, session_id=session_id)
 
     # --- Busca na coleção roteada ---
     try:
         with record_request("rag_pipeline", context=f"vector_search:{target}"):
             if cfg.use_keyword_extraction:
-                results = _search_with_keywords(target, keywords, top_k=top_k)
+                results = _search_with_keywords(target, keywords, top_k=fetch_k)
             else:
                 store   = get_vector_store(collection_name=target)
-                results = store.similarity_search_with_relevance_scores(query, k=top_k)
+                results = store.similarity_search_with_relevance_scores(query, k=fetch_k)
     except Exception as exc:
         record_fallback("rag_pipeline", f"busca vetorial falhou: {exc}", fallback_to="todas as coleções")
-        results = search_all_collections(query, top_k=top_k)
+        results = search_all_collections(query, top_k=fetch_k)
 
     if not results:
         return _NO_RESULTS_MSG
@@ -1128,25 +1260,37 @@ def answer_with_routing(
             fallback_to="todas as coleções",
         )
         with record_request("rag_pipeline", context="fallback_low_score"):
-            fallback = search_all_collections(query, top_k=top_k)
-        if fallback and max(s for _, s in fallback) >= config.RAG_RELEVANCE_THRESHOLD:
-            resp = _synthesize_from_results(query, fallback, keywords, cfg, collection_name=None)
-            _cache_set(query, resp)
+            fallback = search_all_collections(query, top_k=fetch_k)
+        relevant_fb = [r for r in fallback if r[1] >= config.RAG_RELEVANCE_THRESHOLD]
+        if relevant_fb:
+            resp = _paginate_and_synthesize(query, relevant_fb, keywords, cfg,
+                                            collection_name=None, session_id=session_id)
+            _cache_set(query, resp, session_id)
             return resp
         if results:
             print(f"[Pipeline] Respondendo com score baixo ({best_score:.3f}) — pode não ser preciso")
-            resp = _synthesize_from_results(query, results, keywords, cfg, collection_name=target)
-            _cache_set(query, resp)
+            # Resultados dúbios: envia só o top_k, sem guardar lista para paginação
+            resp = _synthesize_from_results(query, results[:top_k], keywords, cfg, collection_name=target)
+            _cache_set(query, resp, session_id)
             return resp
         return _NO_RESULTS_MSG
 
-    resp = _synthesize_from_results(query, results, keywords, cfg, collection_name=target)
-    _cache_set(query, resp)
+    # Mantém apenas os candidatos acima do limiar — essa é a "lista completa"
+    relevant = [r for r in results if r[1] >= config.RAG_RELEVANCE_THRESHOLD]
+    resp = _paginate_and_synthesize(query, relevant, keywords, cfg,
+                                    collection_name=target, session_id=session_id)
+    _cache_set(query, resp, session_id)
     return resp
 
 
-def _cache_set(query: str, response: str) -> None:
+def _cache_set(query: str, response: str, session_id: str = "") -> None:
+    # Respostas com lista pendente são estatais (mudam a cada "fale outras");
+    # cachear a 1ª página confundiria outras sessões — só cacheia listas fechadas.
     try:
+        if session_id:
+            from conversation_state import pagination_store
+            if pagination_store.remaining(session_id) > 0:
+                return
         from cache import response_cache
         response_cache.set(query, response)
     except Exception:

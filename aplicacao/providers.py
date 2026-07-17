@@ -13,6 +13,10 @@ LLM — ordem de preferência (avaliada uma vez na inicialização):
   2. NVIDIA NIM — deepseek-ai/deepseek-v4-flash  (mais rápido)
   3. OpenRouter  — deepseek/deepseek-v4-flash    (fallback externo)
 
+Feature flags (variáveis de ambiente):
+  FEATURE_NVIDIA_LLM=false   → desabilita NVIDIA da cadeia LLM (padrão: false)
+  FEATURE_NVIDIA_LLM=true    → habilita NVIDIA na cadeia LLM
+
 A checagem de disponibilidade na NVIDIA é feita via GET /v1/models
 na primeira chamada a get_llm() e o resultado fica em cache por
 processo — sem overhead nas chamadas subsequentes.
@@ -29,24 +33,34 @@ import config  # garante load_dotenv() antes de qualquer os.getenv()
 
 from reliability import record_fallback, record_info
 
+# ── Feature Flags ─────────────────────────────────────────────────────────────
+# Para habilitar NVIDIA: defina FEATURE_NVIDIA_LLM=true no .env
+FEATURE_NVIDIA_LLM = os.getenv("FEATURE_NVIDIA_LLM", "false").strip().lower() == "true"
+
 # ── Chaves ────────────────────────────────────────────────────────────────────
 
 _raw_nvidia_key      = os.getenv("NVIDIA_API_KEY", "")
 _raw_openrouter_key  = os.getenv("OPENROUTER_API_KEY", "")
 
-NVIDIA_AVAILABLE     = bool(_raw_nvidia_key)     and _raw_nvidia_key     != "sua_chave_aqui"
+_nvidia_key_valid    = bool(_raw_nvidia_key) and _raw_nvidia_key != "sua_chave_aqui"
+
+# NVIDIA na cadeia de LLM (geração de respostas) — controlado pela feature flag
+NVIDIA_AVAILABLE     = FEATURE_NVIDIA_LLM and _nvidia_key_valid
 OPENROUTER_AVAILABLE = bool(_raw_openrouter_key) and _raw_openrouter_key != "sua_chave_aqui"
 
 # Mantido por compatibilidade com código legado
 GOOGLE_AVAILABLE = False
 
 # ── Embeddings — NVIDIA NIM ───────────────────────────────────────────────────
+# Embeddings NÃO dependem de FEATURE_NVIDIA_LLM: a flag controla apenas o uso
+# da NVIDIA na cadeia de LLM. Embeddings exigem só chave válida + biblioteca.
 try:
     from langchain_nvidia_ai_endpoints import NVIDIAEmbeddings
     _nvidia_embeddings_lib = True
 except ImportError:
     _nvidia_embeddings_lib = False
-    NVIDIA_AVAILABLE = False
+
+NVIDIA_EMBEDDINGS_AVAILABLE = _nvidia_key_valid and _nvidia_embeddings_lib
 
 # ── Constantes de modelos LLM ─────────────────────────────────────────────────
 
@@ -122,6 +136,8 @@ def _get_provider_chain() -> list[tuple[str, str, str, str]]:
         return _provider_chain
     with _provider_chain_lock:
         if _provider_chain is None:
+            if not FEATURE_NVIDIA_LLM:
+                print("[providers] FEATURE_NVIDIA_LLM=false — NVIDIA desabilitada por feature flag")
             _provider_chain = _build_provider_chain()
             labels = [lbl for *_, lbl in _provider_chain]
             print(f"[providers] Cadeia LLM: {' → '.join(labels) if labels else 'vazia'}")
@@ -234,7 +250,7 @@ class FallbackLLM:
 
 def get_embeddings():
     """Retorna embeddings NVIDIA NIM: nvidia/nv-embedqa-e5-v5 (1024 dims)."""
-    if not NVIDIA_AVAILABLE:
+    if not NVIDIA_EMBEDDINGS_AVAILABLE:
         record_fallback("embeddings", "NVIDIA_API_KEY não configurada ou inválida")
         raise EnvironmentError(
             "NVIDIA_API_KEY não configurada ou inválida. "
@@ -289,7 +305,8 @@ if __name__ == "__main__":
     print("=" * 60)
     print("  SEÇÃO 1 — Provedores de Embeddings e LLM")
     print("=" * 60)
-    print(f"\n  NVIDIA disponível    : {NVIDIA_AVAILABLE}  (embeddings + LLM)")
+    print(f"\n  NVIDIA embeddings    : {NVIDIA_EMBEDDINGS_AVAILABLE}")
+    print(f"  NVIDIA LLM           : {NVIDIA_AVAILABLE}  (flag FEATURE_NVIDIA_LLM)")
     print(f"  OpenRouter disponível: {OPENROUTER_AVAILABLE}  (LLM fallback)")
 
     info = get_llm_provider_info()

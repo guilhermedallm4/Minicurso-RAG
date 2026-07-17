@@ -1,20 +1,31 @@
 """
 Pipeline Completo: Crawl → Ingestão Segmentada
 ================================================
-Executa crawl_ufpel.py e ingest_ufpel.py em sequência.
-Cada tipo de página é inserido em sua própria coleção no pgvector.
+Executa o deep-crawl dos cursos de Computação (crawl_ufpel.py) e a
+ingestão segmentada (ingest_ufpel.py) em sequência.
 
-Coleções geradas:
-  ufpel_cursos / ufpel_disciplinas / ufpel_projetos
-  ufpel_servidores / ufpel_unidades / ufpel_gestao / ufpel_sobre
+Cursos alvo do crawl:
+  3900 — Ciência da Computação    (Graduação / Bacharelado)
+  8102 — Computação               (Pós-Graduação / Doutorado)
+  7057 — Computação               (Pós-Graduação / Mestrado Acadêmico)
+  3910 — Engenharia de Computação (Graduação / Bacharelado)
+
+Cada tipo de página é inserido em sua própria coleção no pgvector:
+  curso      → ufpel_cursos        (dados do curso)
+  disciplina → ufpel_disciplinas   (ementa, objetivos, conteúdo, turmas)
+  servidor   → ufpel_servidores    (professores: currículo, projetos, aulas)
+  projeto    → ufpel_projetos      (projetos ativos: equipe, financeiro)
+
+O embedding usa o RESUMO de cada registro (embedding_text); os dados
+estruturados completos vão para a tabela doc_completos (JSONB), permitindo
+consultas SQL para montar o contexto completo do LLM.
 
 Uso:
-    # Tudo de uma vez (recomendado — chunking semântico)
-    python run_pipeline.py --all-types --reset
+    # Pipeline completo (crawl + ingestão)
+    python run_pipeline.py --reset
 
-    # Seções individuais
-    python run_pipeline.py --cursos-only --reset
-    python run_pipeline.py --servidores-only --servidores-max 200
+    # Apenas alguns cursos
+    python run_pipeline.py --cursos 3900 3910 --reset
 
     # Re-ingerir a partir de JSON existente (sem re-crawl)
     python run_pipeline.py --from-json dados_ufpel.json --reset
@@ -28,12 +39,12 @@ import asyncio
 import json
 import sys
 from datetime import datetime, timezone
-from pathlib import Path
 
-from crawl_ufpel  import UFPelCrawler, save_json
+from crawl_ufpel  import TARGET_CURSOS, UFPelCrawler, save_json
 from ingest_ufpel import (
     pages_to_documents, ingest_segmented,
     ensure_dados_completos_table, store_dados_completos,
+    ensure_info_tables, store_info_tables,
 )
 
 DEFAULT_JSON_OUTPUT = "dados_ufpel.json"
@@ -41,86 +52,37 @@ DEFAULT_JSON_OUTPUT = "dados_ufpel.json"
 
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="Pipeline completo: crawl UFPel + ingestão segmentada por coleção",
+        description="Pipeline completo: deep-crawl dos cursos de Computação "
+                    "da UFPel + ingestão segmentada por coleção",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
 
-    g_crawl = p.add_argument_group("Seleção de seções para crawl")
-    g_crawl.add_argument("--all-types",         action="store_true",
-                         help="Crawlea todas as seções em sequência.")
-    g_crawl.add_argument("--cursos-only",        action="store_true")
-    g_crawl.add_argument("--disciplinas-only",   action="store_true")
-    g_crawl.add_argument("--projetos-only",      action="store_true")
-    g_crawl.add_argument("--servidores-only",    action="store_true")
-    g_crawl.add_argument("--unidades-only",      action="store_true")
-    g_crawl.add_argument("--gestao-only",        action="store_true")
-    g_crawl.add_argument("--sobre-only",         action="store_true")
-
-    g_lim = p.add_argument_group("Limites por seção (padrão: sem limite)")
-    g_lim.add_argument("--cursos-max",           type=int, default=None, metavar="N")
-    g_lim.add_argument("--disciplinas-max",      type=int, default=None, metavar="N")
-    g_lim.add_argument("--projetos-max",         type=int, default=None, metavar="N")
-    g_lim.add_argument("--servidores-max",       type=int, default=None, metavar="N")
-    g_lim.add_argument("--unidades-max",         type=int, default=None, metavar="N")
-
-    g_perf = p.add_argument_group("Performance do crawl")
-    g_perf.add_argument("--concurrency",         type=int, default=5, metavar="N",
-                        help="Requisições simultâneas por seção")
-    g_perf.add_argument("--crawl-delay",         type=float, default=1.0, metavar="SECS",
-                        help="Delay (s) entre requests por worker")
+    g_crawl = p.add_argument_group("Crawl")
+    g_crawl.add_argument("--cursos", nargs="+", default=None, metavar="COD",
+                         choices=list(TARGET_CURSOS.keys()),
+                         help="Subconjunto dos códigos de curso alvo "
+                              f"(padrão: todos — {' '.join(TARGET_CURSOS)})")
+    g_crawl.add_argument("--concurrency",  type=int, default=5, metavar="N",
+                         help="Requisições simultâneas")
+    g_crawl.add_argument("--crawl-delay",  type=float, default=1.0, metavar="SECS",
+                         help="Delay (s) entre requests por worker")
 
     g_ingest = p.add_argument_group("Ingestão")
-    g_ingest.add_argument("--output",            default=DEFAULT_JSON_OUTPUT, metavar="FILE",
+    g_ingest.add_argument("--output",       default=DEFAULT_JSON_OUTPUT, metavar="FILE",
                           help="Arquivo JSON onde os dados crawleados serão salvos")
-    g_ingest.add_argument("--from-json",         default=None, metavar="FILE",
+    g_ingest.add_argument("--from-json",    default=None, metavar="FILE",
                           help="Pula o crawl e ingesta a partir de um JSON existente")
-    g_ingest.add_argument("--reset",             action="store_true",
+    g_ingest.add_argument("--reset",        action="store_true",
                           help="Recria cada coleção no banco antes de inserir")
-    g_ingest.add_argument("--max-por-tipo",      type=int, default=None, metavar="N",
+    g_ingest.add_argument("--max-por-tipo", type=int, default=None, metavar="N",
                           help="Limita N documentos por tipo na ingestão (útil no free tier)")
-    g_ingest.add_argument("--delay",             type=float, default=0.7, metavar="SECS",
+    g_ingest.add_argument("--delay",        type=float, default=0.7, metavar="SECS",
                           help="Segundos entre lotes de embedding")
-    g_ingest.add_argument("--chunking",          choices=["semantico", "recursivo"],
-                          default="semantico",
-                          help="Estratégia de chunking (padrão: semantico)")
+    g_ingest.add_argument("--chunking",     choices=["documento", "semantico", "recursivo"],
+                          default="documento",
+                          help="Estratégia de chunking (padrão: documento — "
+                               "1 doc = 1 chunk com o embedding_text inteiro)")
     return p
-
-
-async def _run_crawl(args: argparse.Namespace) -> list[dict]:
-    """Executa o crawl assíncrono e retorna a lista de documentos."""
-    crawler = UFPelCrawler(concurrency=args.concurrency, delay=args.crawl_delay)
-
-    any_specific = any([
-        args.all_types, args.cursos_only, args.disciplinas_only,
-        args.projetos_only, args.servidores_only, args.unidades_only,
-        args.gestao_only, args.sobre_only,
-    ])
-
-    if not any_specific or args.all_types:
-        return await crawler.crawl_all(
-            cursos_max=args.cursos_max,
-            disciplinas_max=args.disciplinas_max,
-            projetos_max=args.projetos_max,
-            servidores_max=args.servidores_max,
-            unidades_max=args.unidades_max,
-        )
-
-    pages: list[dict] = []
-    if args.cursos_only:
-        pages += await crawler.crawl_cursos(args.cursos_max)
-    if args.disciplinas_only:
-        pages += await crawler.crawl_disciplinas(args.disciplinas_max)
-    if args.projetos_only:
-        pages += await crawler.crawl_projetos(args.projetos_max)
-    if args.servidores_only:
-        pages += await crawler.crawl_servidores(args.servidores_max)
-    if args.unidades_only:
-        pages += await crawler.crawl_unidades(args.unidades_max)
-    if args.gestao_only:
-        pages += await crawler.crawl_gestao()
-    if args.sobre_only:
-        pages += await crawler.crawl_sobre()
-    return pages
 
 
 def main() -> None:
@@ -136,19 +98,19 @@ def main() -> None:
             pages: list[dict] = json.load(fh)
         print(f"[Pipeline] {len(pages)} documentos carregados do JSON.")
     else:
-        active = []
-        if args.all_types or args.cursos_only:      active.append("Cursos")
-        if args.all_types or args.disciplinas_only: active.append("Disciplinas")
-        if args.all_types or args.projetos_only:    active.append("Projetos")
-        if args.all_types or args.servidores_only:  active.append("Servidores")
-        if args.all_types or args.unidades_only:    active.append("Unidades")
-        if args.all_types or args.gestao_only:      active.append("Gestao")
-        if args.all_types or args.sobre_only:       active.append("Sobre")
-        label = " + ".join(active) if active else "Todas as seções"
-        print(f"  PASSO 1/2 — Crawling: {label}")
+        alvo = args.cursos or list(TARGET_CURSOS.keys())
+        print("  PASSO 1/2 — Deep-crawl dos cursos de Computação:")
+        for cod in alvo:
+            info = TARGET_CURSOS[cod]
+            print(f"    ↳ {cod} — {info['nome']} ({info['nivel']} / {info['grau']})")
         print("=" * 62)
 
-        pages = asyncio.run(_run_crawl(args))
+        crawler = UFPelCrawler(
+            concurrency=args.concurrency,
+            delay=args.crawl_delay,
+            cursos=args.cursos,
+        )
+        pages = asyncio.run(crawler.crawl())
         save_json(pages, args.output)
 
     # ── Passo 2: Ingestão segmentada ─────────────────────────────────────────
@@ -157,24 +119,29 @@ def main() -> None:
     print("  PASSO 2/2 — Ingestão Segmentada no pgvector")
     print("=" * 62)
 
-    # Persiste dados_completos para contexto rico no LLM
+    # Persiste dados_completos (JSONB) para contexto rico no LLM via SQL
     ensure_dados_completos_table()
     n_stored = store_dados_completos(pages)
     if n_stored:
         print(f"[Pipeline] {n_stored} dados_completos armazenados.")
+
+    # Persiste as tabelas estruturadas por tipo (*_info) para consultas SQL diretas
+    ensure_info_tables()
+    n_info = store_info_tables(pages)
+    if n_info:
+        print(f"[Pipeline] {n_info} registros estruturados armazenados nas tabelas *_info.")
 
     documents = pages_to_documents(pages)
     if not documents:
         print("[Erro] Nenhum documento válido para ingerir.")
         sys.exit(1)
 
-    use_semantic = args.chunking == "semantico"
     summary = ingest_segmented(
         documents,
         reset=args.reset,
         delay=args.delay,
         max_per_tipo=args.max_por_tipo,
-        use_semantic_chunking=use_semantic,
+        chunking=args.chunking,
     )
 
     # ── Resumo final ─────────────────────────────────────────────────────────

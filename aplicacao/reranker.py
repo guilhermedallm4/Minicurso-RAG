@@ -27,12 +27,12 @@ from typing import List
 from langchain_core.documents import Document
 
 import aplicacao.config as config
-from aplicacao.providers import NVIDIA_AVAILABLE
+from aplicacao.providers import NVIDIA_EMBEDDINGS_AVAILABLE
 
 # Importações condicionais para evitar falha se pacote não estiver instalado
 try:
     from langchain_nvidia_ai_endpoints import NVIDIARerank
-    _nvidia_rerank_ok = NVIDIA_AVAILABLE
+    _nvidia_rerank_ok = NVIDIA_EMBEDDINGS_AVAILABLE
 except ImportError:
     _nvidia_rerank_ok = False
 

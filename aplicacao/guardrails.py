@@ -49,13 +49,48 @@ class InputGuard:
     Executa as verificações em ordem — para no primeiro bloqueio.
     """
 
-    # Termos relacionados ao domínio institucional aceito
-    _TOPICOS_PERMITIDOS = [
-        "matrícula", "disciplina", "professor", "curso", "horário",
-        "biblioteca", "restaurante", "ru", "ppgc", "pós-graduação",
-        "dissertação", "tese", "prazo", "calendário", "secretaria",
-        "bolsa", "estágio", "vestibular", "edital", "regulamento",
-        "universidade", "faculdade", "campus", "laboratório",
+    # Termos do domínio de Computação aceitos (qualquer um destes na query = permitido)
+    _TOPICOS_COMPUTACAO = [
+        # Cursos e programas
+        "computação", "computacao", "ciência da computação", "engenharia de computação",
+        "sistemas de informação", "sistemas de informacao", "tecnologia da informação",
+        "tecnologia da informacao", "cdtec", "bsi", "cc",
+        # Pessoas e estrutura
+        "professor", "professora", "docente", "servidor", "coordenador",
+        "disciplina", "matéria", "materia", "cadeira",
+        "curso", "grade curricular", "currículo", "curriculo",
+        "laboratório", "laboratorio", "lab",
+        "estágio", "estagio", "tcc", "trabalho de conclusão",
+        "bolsa", "monitoria", "iniciação científica", "iniciacao cientifica",
+        "matrícula", "matricula", "horário", "horario", "turma",
+        # Tecnologia e área técnica
+        "algoritmo", "programação", "programacao", "software", "hardware",
+        "banco de dados", "redes", "inteligência artificial", "inteligencia artificial",
+        "machine learning", "aprendizado de máquina", "aprendizado de maquina",
+        "segurança", "seguranca", "cibersegurança", "ciberseguranca",
+        "sistema operacional", "compilador", "linguagem de programação",
+        "linguagem de programacao", "estrutura de dados", "arquitetura",
+        "computação gráfica", "computacao grafica",
+        "processamento de linguagem natural", "visão computacional",
+        "visao computacional", "redes neurais", "deep learning",
+        # Pós-graduação
+        "ppgc", "mestrado", "doutorado", "pós-graduação", "pos-graduacao",
+        "dissertação", "dissertacao", "tese",
+        # Infraestrutura
+        "campus", "universidade", "ufpel", "calendário", "calendario",
+        "edital", "regulamento", "secretaria",
+    ]
+
+    # Tópicos claramente fora do escopo — bloqueio explícito
+    _TOPICOS_FORA_ESCOPO = [
+        r"\breceit[ao]\b", r"\bculin[aá]ri[ao]\b", r"\bfutebol\b", r"\besporte\b",
+        r"\bm[úu]sic[ao]\b", r"\bfilm[e]?\b", r"\bseri[ae]\b", r"\bnovel[a]?\b",
+        r"\bpol[ií]tic[ao]\b", r"\belei[çc][aã]o\b",
+        r"\bagronom[ií]a\b", r"\bveterinár[ií]a\b", r"\bmedicin[ao]\b",
+        r"\bdireito\b(?!\s+autoral)", r"\bcontabilidade\b", r"\badministra[çc][aã]o\b(?!\s+de\s+sistemas)",
+        r"\bpsicolog[ií]a\b", r"\bpedagogia\b", r"\bfilosofía?\b",
+        r"\bgeografi[ao]\b", r"\bhistóri[ao]\b(?!\s+da\s+computa)",
+        r"\beconomi[ao]\b(?!\s+computacional)",
     ]
 
     # Padrões suspeitos de prompt injection
@@ -83,16 +118,18 @@ class InputGuard:
 
     def __init__(
         self,
-        min_len: int = 3,
+        min_len: int = 2,
         max_len: int = 1000,
         block_pii: bool = True,
         block_injection: bool = True,
+        block_off_topic: bool = True,     # bloqueia perguntas fora de Computação
         topic_guard_llm: bool = False,    # requer LLM, adiciona latência
     ):
         self.min_len = min_len
         self.max_len = max_len
         self.block_pii = block_pii
         self.block_injection = block_injection
+        self.block_off_topic = block_off_topic
         self.topic_guard_llm = topic_guard_llm
 
     def check(self, query: str) -> GuardResult:
@@ -101,6 +138,7 @@ class InputGuard:
             self._check_length,
             self._check_injection,
             self._check_pii,
+            self._check_computing_scope,
         ]:
             result = fn(query)
             if not result.passed:
@@ -112,6 +150,54 @@ class InputGuard:
                 return result
 
         return GuardResult(True, "all", "Query válida.")
+
+    def _check_computing_scope(self, query: str) -> GuardResult:
+        """
+        Bloqueia perguntas claramente fora da área de Computação.
+        Lógica em duas etapas:
+          1. Se contém termo explícito de fora do escopo → bloqueia
+          2. Se não contém nenhum termo de computação → bloqueia com mensagem de escopo
+        Perguntas ambíguas curtas (< 6 palavras) passam sem bloqueio de escopo.
+        """
+        if not self.block_off_topic:
+            return GuardResult(True, "scope", "OK")
+
+        import unicodedata
+
+        def _norm(s: str) -> str:
+            return unicodedata.normalize("NFD", s.lower())
+
+        q_norm = _norm(query)
+
+        # Passo 1 — bloqueio explícito por termos fora do escopo
+        for pattern in self._TOPICOS_FORA_ESCOPO:
+            if re.search(pattern, q_norm, re.IGNORECASE):
+                return GuardResult(
+                    False, "scope",
+                    "Sou um assistente especializado na área de Computação da UFPel. "
+                    "Não consigo responder perguntas sobre outros temas. "
+                    "Tente perguntar sobre cursos, disciplinas, professores ou projetos de Computação.",
+                    "medium",
+                )
+
+        # Passo 2 — se query muito curta (≤ 3 palavras), não aplica filtro positivo
+        # Ex: "olá", "oi tudo bem", "ajuda" — deixa passar
+        if len(query.split()) <= 3:
+            return GuardResult(True, "scope", "OK")
+
+        # Passo 3 — verifica se ao menos um termo de computação está presente
+        has_computing_term = any(_norm(term) in q_norm for term in self._TOPICOS_COMPUTACAO)
+        if not has_computing_term:
+            return GuardResult(
+                False, "scope",
+                "Sou um assistente especializado na área de Computação da UFPel (CDTec). "
+                "Posso ajudar com informações sobre cursos, disciplinas, professores, "
+                "projetos e estrutura do Centro de Desenvolvimento Tecnológico. "
+                "Como posso ajudá-lo nessa área?",
+                "low",
+            )
+
+        return GuardResult(True, "scope", "OK")
 
     def _check_length(self, query: str) -> GuardResult:
         q = query.strip()

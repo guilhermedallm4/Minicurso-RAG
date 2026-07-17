@@ -115,6 +115,10 @@ def collection_for_tipo(tipo: str) -> str:
 CHUNK_SIZE    = 500
 CHUNK_OVERLAP = 50
 
+# Overlap entre chunks adjacentes no chunking semântico (chunking_semantico.py),
+# que agrupa seções inteiras e por isso não herda o CHUNK_OVERLAP do splitter.
+SEMANTIC_CHUNK_OVERLAP = 20
+
 # =============================================================================
 # RAG — Parâmetros de retrieval e geração
 # =============================================================================
@@ -133,3 +137,10 @@ RAG_MAX_CHARS_PER_DOC: int = 1500
 # Limiar mínimo de relevância para aceitar um resultado (0–1, cosine)
 # Abaixo disso o pipeline tenta fallback multi-coleção.
 RAG_RELEVANCE_THRESHOLD: float = 0.20
+
+# Paginação de resultados: a busca vetorial traz até RAG_FETCH_ALL_K candidatos
+# acima do limiar de relevância ("traga todos"), mas só RAG_TOP_K_FINAL são
+# enviados ao LLM por vez. O restante fica no cache de sessão
+# (conversation_state.py) e é apresentado quando o aluno pede
+# "fale outras disciplinas", "mostre mais", etc.
+RAG_FETCH_ALL_K: int = 40

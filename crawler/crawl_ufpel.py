@@ -1,27 +1,53 @@
 """
-Crawler Async do Portal Institucional UFPel
-===========================================
-Extrai dados estruturados de todas as seções do portal:
-  - cursos, disciplinas, projetos, servidores, unidades, gestao, sobre
+Crawler Async do Portal Institucional UFPel — Cursos de Computação
+===================================================================
+Deep-crawl focado em 4 cursos:
+
+  ┌────────┬───────────────────────────┬───────────────┬────────────────────┐
+  │ Código │ Curso                     │ Nível         │ Grau               │
+  ├────────┼───────────────────────────┼───────────────┼────────────────────┤
+  │ 3900   │ Ciência da Computação     │ Graduação     │ Bacharelado        │
+  │ 8102   │ Computação                │ Pós-Graduação │ Doutorado          │
+  │ 7057   │ Computação                │ Pós-Graduação │ Mestrado Acadêmico │
+  │ 3910   │ Engenharia de Computação  │ Graduação     │ Bacharelado        │
+  └────────┴───────────────────────────┴───────────────┴────────────────────┘
+
+Fluxo de captura (4 fases):
+  1. CURSOS       → ficha-dados, aba Informações (todas as subabas/accordions),
+                    Matriz Curricular, Professores, Turmas Ofertadas e
+                    rodapé (conceitos de curso + formas de ingresso + vagas)
+  2. DISCIPLINAS  → cada disciplina da matriz/turmas dos cursos:
+                    informações gerais, Ementa, Objetivos, Conteúdo
+                    Programático, Bibliografia e Turmas Ofertadas
+  3. PROFESSORES  → cada professor dos cursos (apenas situação ativa):
+                    informações gerais, currículo (Resumo, Formação
+                    acadêmica, Áreas de atuação), projetos ATIVOS e
+                    disciplinas que ministra
+  4. PROJETOS     → cada projeto ativo dos professores: informações gerais,
+                    aba Informações, Equipe (apenas membros vigentes) e
+                    Financeiro (ou "Não há informações disponíveis")
 
 Schema de saída (por documento):
   {
     "id":             <uuid>,
-    "tipo":           <seção>,
+    "tipo":           curso | disciplina | servidor | projeto,
     "titulo":         <nome/título do registro>,
-    "embedding_text": <texto otimizado para embeddings>,
+    "embedding_text": <resumo do registro — usado para embedding no pgvector>,
     "metadata":       { url, crawled_at, ...campos filtráveis },
-    "dados_completos":{ todos os dados capturados }
+    "dados_completos":{ todos os dados estruturados — vai para doc_completos
+                        (JSONB), consultável via SQL }
   }
+
+Cada tipo é ingerido em sua própria collection no pgvector
+(ufpel_cursos, ufpel_disciplinas, ufpel_servidores, ufpel_projetos).
 
 Campos vazios, nulos ou inexistentes são preenchidos com:
   "Não há informações disponíveis"
 
 Uso:
-    python crawl_ufpel.py --all-types --output dados_ufpel.json
-    python crawl_ufpel.py --cursos-only --cursos-max 50
-    python crawl_ufpel.py --projetos-only
+    python crawl_ufpel.py --output dados_ufpel.json
     python crawl_ufpel.py --concurrency 5 --delay 1.0
+    python crawl_ufpel.py --cursos 3900 3910        # subconjunto dos alvos
 
 Requisitos:
     pip install -r requirements_crawler.txt
@@ -36,7 +62,7 @@ import re
 import unicodedata
 import uuid
 from datetime import datetime, date, timezone
-from typing import Any, Callable
+from typing import Any
 from urllib.parse import urljoin, urlparse
 
 import aiohttp
@@ -48,22 +74,16 @@ from bs4 import BeautifulSoup
 
 BASE_URL = "https://institucional.ufpel.edu.br"
 
-SECTION_URLS: dict[str, str] = {
-    "cursos":      f"{BASE_URL}/cursos",
-    "disciplinas": f"{BASE_URL}/disciplinas",
-    "projetos":    f"{BASE_URL}/projetos",
-    "servidores":  f"{BASE_URL}/servidores",
-    "unidades":    f"{BASE_URL}/unidades",
-    "gestao":      f"{BASE_URL}/gestao",
-    "sobre":       f"{BASE_URL}/sobre",
-}
-
-URL_PATTERNS: dict[str, str] = {
-    "cursos":      "/cursos/cod/",      # portal usa /cod/ não /id/ para cursos
-    "disciplinas": "/disciplinas/id/",
-    "projetos":    "/projetos/id/",
-    "servidores":  "/servidores/id/",
-    "unidades":    "/unidades/id/",
+# Cursos alvo do crawl — código UFPel → identificação
+TARGET_CURSOS: dict[str, dict[str, str]] = {
+    "3900": {"nome": "Ciência da Computação",    "nivel": "Graduação",
+             "grau": "Bacharelado",        "turno": "Integral (matutino+vespertino)"},
+    "8102": {"nome": "Computação",               "nivel": "Pós-Graduação",
+             "grau": "Doutorado",          "turno": "Integral"},
+    "7057": {"nome": "Computação",               "nivel": "Pós-Graduação",
+             "grau": "Mestrado Acadêmico", "turno": "Integral"},
+    "3910": {"nome": "Engenharia de Computação", "nivel": "Graduação",
+             "grau": "Bacharelado",        "turno": "Integral (matutino+vespertino)"},
 }
 
 EMPTY = "Não há informações disponíveis"
@@ -85,14 +105,18 @@ DEFAULT_CONCURRENCY = 5
 DEFAULT_DELAY       = 1.0      # segundos entre requests por worker
 DEFAULT_OUTPUT      = "dados_ufpel.json"
 
-SKIP_EXTENSIONS = frozenset({
-    ".pdf", ".doc", ".docx", ".xls", ".xlsx",
-    ".zip", ".rar", ".png", ".jpg", ".jpeg",
-    ".gif", ".svg", ".mp4", ".mp3", ".ico",
+# Situações de servidor consideradas INATIVAS — registros com essas situações
+# são descartados (o portal cria um ID por vínculo; mantemos só o ativo).
+INACTIVE_SITUACOES: frozenset[str] = frozenset({
+    "aposentado", "falecido", "exonerado", "demitido", "excluído", "excluido",
+    "exclusão", "exclusao", "redistribuído", "redistribuido", "cedido",
+    "contrato encerrado", "rescindido", "desligado", "vacância", "vacancia",
 })
 
 NOISE_TAGS = ["script", "style", "noscript", "iframe", "nav",
               "header", "footer", "aside", "form", "button"]
+
+DIAS_SEMANA = ("SEG", "TER", "QUA", "QUI", "SEX", "SAB", "SÁB", "DOM")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Logging
@@ -161,7 +185,7 @@ def _ficha_get(ficha: dict[str, str], *keys: str) -> str:
     """
     Lookup case-insensitive no dict de ficha-dados.
     Aceita múltiplas chaves alternativas e retorna a primeira que tiver valor.
-    Normaliza: remove espaços extras, ignora case e caracteres de anotação como (*).
+    Normaliza: remove espaços extras, ignora case e anotações como (*).
     """
     def _norm(s: str) -> str:
         return re.sub(r"\s+", " ", re.sub(r"\s*\([^)]*\)", "", s)).strip().lower()
@@ -169,14 +193,22 @@ def _ficha_get(ficha: dict[str, str], *keys: str) -> str:
     normalized = {_norm(k): v for k, v in ficha.items()}
 
     for key in keys:
-        # Tentativa exata primeiro
         if key in ficha and ficha[key] != EMPTY:
             return ficha[key]
-        # Tentativa case-insensitive + sem anotações
         nk = _norm(key)
         if nk in normalized and normalized[nk] != EMPTY:
             return normalized[nk]
     return EMPTY
+
+
+def _direct_rows(table: Any) -> list:
+    """
+    Retorna apenas as <tr> diretas da tabela, ignorando linhas de tabelas
+    aninhadas (o portal aninha tabelas de horários dentro das células).
+    """
+    if not table:
+        return []
+    return [tr for tr in table.find_all("tr") if tr.find_parent("table") is table]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -260,67 +292,12 @@ class RateLimitedClient:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Paginação automática
-# ─────────────────────────────────────────────────────────────────────────────
-
-async def get_listing_urls(
-    client: RateLimitedClient,
-    listing_url: str,
-    pattern: str,
-) -> list[str]:
-    """
-    Navega todas as páginas de uma listagem (paginação automática) e retorna
-    URLs que contêm `pattern`, em ordem determinística.
-    """
-    collected: set[str] = set()
-    visited:   set[str] = set()
-    page_url:  str | None = listing_url
-
-    while page_url and page_url not in visited:
-        visited.add(page_url)
-        soup = await client.fetch(page_url)
-        if soup is None:
-            break
-
-        for a in soup.find_all("a", href=True):
-            href = a["href"].strip()
-            if pattern in href:
-                path = urlparse(href).path.lower()
-                if not any(path.endswith(e) for e in SKIP_EXTENSIONS):
-                    collected.add(_normalize_url(urljoin(listing_url, href)))
-
-        page_url = _find_next_page(soup, page_url)
-
-    log.info("[Listagem] %s → %d URLs (padrão=%s)", listing_url, len(collected), pattern)
-    return sorted(collected)
-
-
-def _find_next_page(soup: BeautifulSoup, current: str) -> str | None:
-    """Detecta link de próxima página por rel, texto ou classe CSS."""
-    for a in soup.find_all("a", href=True):
-        rel  = " ".join(a.get("rel", []))
-        cls  = " ".join(a.get("class", []))
-        text = a.get_text(strip=True).lower()
-        is_next = (
-            "next" in rel
-            or any(t in text for t in ("próxima", "próximo", "next"))
-            or text in ("»", ">")
-            or any(c in cls.lower() for c in ("next", "proxima", "pagination-next"))
-        )
-        if is_next:
-            full = _normalize_url(urljoin(current, a["href"].strip()))
-            if full != current:
-                return full
-    return None
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # Extratores compartilhados (padrões HTML do portal UFPel)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _extract_ficha(soup: BeautifulSoup) -> dict[str, str]:
+def _extract_ficha(root: Any) -> dict[str, str]:
     """Extrai pares label→valor da estrutura ficha-dados do portal."""
-    ficha = soup.find(class_="ficha-dados")
+    ficha = root.find(class_="ficha-dados") if root else None
     if not ficha:
         return {}
     result: dict[str, str] = {}
@@ -334,13 +311,19 @@ def _extract_ficha(soup: BeautifulSoup) -> dict[str, str]:
 
 def _extract_accordions(soup: BeautifulSoup,
                         container_id: str = "informacoes") -> dict[str, str]:
-    """Extrai seções de acordeão em #informacoes (Ementa, Objetivos, etc.)."""
+    """
+    Extrai TODAS as seções de acordeão (subabas) de um container.
+    Ex.: em #informacoes de curso: Contextualização, Objetivos, Perfil do
+    Egresso, Competências e habilidades, Organização Curricular, etc.
+    """
     container = soup.find(id=container_id)
     if not container:
         return {}
     result: dict[str, str] = {}
     for acc in container.find_all(class_=re.compile(r"accordion", re.I)):
-        heading = acc.find("h3") or acc.find("h2") or acc.find("h4")
+        if "accordion-content" in (acc.get("class") or []):
+            continue
+        heading = acc.find(["h2", "h3", "h4"])
         content = acc.find(class_=re.compile(r"accordion.content|conteudo|body", re.I))
         if not content:
             divs = [d for d in acc.find_all("div", recursive=False)]
@@ -357,8 +340,8 @@ def _extract_table_rows(table: Any) -> list[dict[str, str]]:
         return []
     headers = [th.get_text(strip=True) for th in table.find_all("th")]
     rows: list[dict[str, str]] = []
-    for tr in table.find_all("tr")[1 if headers else 0:]:
-        cells = tr.find_all(["td", "th"])
+    for tr in _direct_rows(table)[1 if headers else 0:]:
+        cells = tr.find_all(["td", "th"], recursive=False)
         if not cells:
             continue
         if headers:
@@ -378,68 +361,180 @@ def _extract_list_items(el: Any) -> list[str]:
             if (t := _clean(li.get_text(strip=True))) != EMPTY]
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Extratores por seção
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _extract_curso(soup: BeautifulSoup, url: str) -> dict:
+def _parse_horarios(cell: Any) -> list[str]:
     """
-    Extrai dados de um curso do portal UFPel.
+    Extrai horários de aula da tabela aninhada `grade-horarios` do portal:
+    células por período (Manhã/Tarde/Noite) com o dia marcado em
+    <span class="grade-horarios-dia">SEG</span> seguido do horário.
+    Retorna lista tipo ["SEG 10:00 - 10:50", "QUA 08:00 - 08:50", ...].
+    """
+    horarios: list[str] = []
+    for tab in cell.find_all("table", class_=re.compile(r"grade-horarios")):
+        for td in tab.find_all("td"):
+            dia = ""
+            for child in td.children:
+                if getattr(child, "name", None) == "span":
+                    t = child.get_text(strip=True)
+                    if t:
+                        dia = t
+                elif isinstance(child, str) and child.strip():
+                    hora = child.strip()
+                    horarios.append(f"{dia} {hora}".strip() if dia else hora)
+    return horarios
 
-    URL do portal: /cursos/cod/XXX  (não /cursos/id/)
 
-    Campos na ficha-dados:
-      "Nome do Curso /Conceitos (*)" → nome (strip das anotações)
-      "Nível / Grau"                 → nivel
-      "Modalidade"                   → modalidade
-      "Turno"                        → turno
-      "Código UFPel"                 → codigo_ufpel
-      "Unidade"                      → unidade
-      "Coordenador"                  → coordenador
+def _split_lines(el: Any) -> list[str]:
+    """
+    Extrai itens de um elemento onde cada item é separado por <br> ou <li>
+    (padrão do portal em Formação acadêmica e Áreas de atuação).
+    """
+    if not el:
+        return []
+    itens = _extract_list_items(el)
+    if itens:
+        return itens
+    return [t for line in el.get_text("\n").splitlines()
+            if (t := _clean(line)) != EMPTY]
 
-    Seções:
-      #curriculo   → matriz curricular (tabelas por semestre)
-      #professores → tabela com <span class="p-name"> e <span class="tabela-detalhe-info">
-      #turmas      → turmas ofertadas (tabela)
-      #informacoes → accordions (Contextualização, Objetivos, Perfil do Egresso, etc.)
-                     pode estar vazio se carregado via JS
+
+def _table_after_heading(soup: BeautifulSoup, heading_re: str) -> Any:
+    """Encontra a primeira tabela após um h2/h3 cujo texto casa com heading_re."""
+    for h in soup.find_all(["h2", "h3"]):
+        if re.search(heading_re, h.get_text(strip=True), re.I):
+            return h.find_next("table")
+    return None
+
+
+def _is_vigente(data_fim_str: str) -> bool:
+    """Vigente = sem data final OU data final >= hoje."""
+    d = _parse_date(data_fim_str)
+    return d is None or d >= date.today()
+
+
+def _is_situacao_ativa(situacao: str) -> bool:
+    """True se a situação funcional do servidor for ativa atualmente."""
+    s = situacao.lower()
+    return not any(t in s for t in INACTIVE_SITUACOES)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Extrator: CURSO
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _extract_curso_rodape(soup: BeautifulSoup) -> dict[str, Any]:
+    """
+    Extrai o rodapé (div.conteudo-rodape / #notas) do curso:
+      "(*) Conceitos de curso:"   → lista de itens/links
+      "(**) Formas de ingresso:"  → dict {sigla: descrição}
+    """
+    rodape = soup.find(class_="conteudo-rodape")
+    if not rodape:
+        return {"conceitos_curso": [EMPTY], "formas_ingresso": {"info": EMPTY}}
+
+    conceitos: list[str] = []
+    formas: dict[str, str] = {}
+    current: str | None = None
+
+    for el in rodape.find_all(["p", "ul", "div"], recursive=False):
+        if el.name == "p":
+            texto = el.get_text(strip=True).lower()
+            if "conceito" in texto:
+                current = "conceitos"
+            elif "ingresso" in texto:
+                current = "ingresso"
+            else:
+                current = None
+        elif current == "conceitos":
+            conceitos.extend(_extract_list_items(el) or [_soup_text(el)])
+        elif current == "ingresso":
+            table = el if el.name == "table" else el.find("table")
+            if table:
+                for tr in _direct_rows(table):
+                    tds = tr.find_all("td")
+                    if len(tds) >= 2:
+                        sigla = _clean(tds[0].get_text(strip=True))
+                        desc  = _clean(tds[1].get_text(strip=True))
+                        if sigla != EMPTY and sigla not in formas:
+                            formas[sigla] = desc
+            else:
+                items = _extract_list_items(el)
+                for i, item in enumerate(items):
+                    formas[f"item_{i + 1}"] = item
+
+    return {
+        "conceitos_curso":  conceitos or [EMPTY],
+        "formas_ingresso":  formas or {"info": EMPTY},
+    }
+
+
+def _extract_curso_vagas(soup: BeautifulSoup, ficha_el: Any = None) -> list[dict[str, str]]:
+    """
+    Extrai a tabela de vagas por forma de ingresso que segue o label
+    "Vagas e Formas de Ingresso (**)" na ficha-dados (table.tabela-fixed).
+    """
+    vagas: list[dict[str, str]] = []
+    ficha = soup.find(class_="ficha-dados")
+    if not ficha:
+        return vagas
+    for label_el in ficha.find_all(class_="ficha-label"):
+        if "vagas" not in label_el.get_text(strip=True).lower():
+            continue
+        table = label_el.find_next_sibling("table") or label_el.find_next("table")
+        if not table:
+            continue
+        headers = [th.get_text(strip=True) for th in table.find_all("th")]
+        headers = [h if h else "Processo" for h in headers]
+        for tr in _direct_rows(table)[1:]:
+            cells = tr.find_all("td")
+            if not cells:
+                continue
+            row: dict[str, str] = {"processo": _clean(cells[0].get_text(strip=True))}
+            for i, cell in enumerate(cells[1:], start=1):
+                if i < len(headers):
+                    valor = cell.get_text(strip=True)
+                    if valor:
+                        row[headers[i]] = valor
+            vagas.append(row)
+        break
+    return vagas
+
+
+def _extract_curso(soup: BeautifulSoup, url: str, codigo: str) -> dict:
+    """
+    Extrai todos os dados de um curso alvo:
+      - ficha-dados (dados gerais)
+      - #informacoes: todas as subabas/accordions
+      - #curriculo: matriz curricular com URL de cada disciplina
+      - #professores: nome, unidade e URL de cada professor
+      - #turmas: turmas ofertadas
+      - rodapé: conceitos de curso + formas de ingresso + vagas
     """
     _strip_noise(soup)
     ficha      = _extract_ficha(soup)
     accordions = _extract_accordions(soup)
 
-    # "Nome do Curso /Conceitos (*)" — _ficha_get normaliza e ignora a anotação (*)
+    alvo = TARGET_CURSOS.get(codigo, {})
     nome = _first_valid(
         _ficha_get(ficha, "Nome do Curso /Conceitos (*)", "Nome do Curso", "Nome"),
+        alvo.get("nome", ""),
         _soup_text(soup.find("h1")),
     )
 
-    # Objetivos podem estar no accordion (se carregados) ou em campo da ficha
-    objetivos = _first_valid(
-        accordions.pop("Objetivos", ""),
-        accordions.pop("Objetivo", ""),
-        _ficha_get(ficha, "Objetivos"),
-    )
-
-    # ── Matriz curricular — seção #curriculo ────────────────────────────────
-    # Estrutura: accordion por semestre → tabela com colunas:
-    #   Código | Disciplina / Pré-requisitos | Caráter | Cr. | Horas
-    # As células de Código e Disciplina têm <a href="/disciplinas/cod/XXX">
+    # ── Matriz curricular — #curriculo (accordion por semestre) ─────────────
     matriz: list[dict] = []
     curriculo_sec = soup.find(id="curriculo")
     if curriculo_sec:
-        sem_num = 0
         for acc_h3 in curriculo_sec.find_all("h3", class_="cor-fundo"):
-            sem_num += 1
-            sem_label = acc_h3.get_text(strip=True) or f"{sem_num}º Semestre"
-            content_div = acc_h3.find_next_sibling(attrs={"data-content": True})
+            sem_label = acc_h3.get_text(strip=True)
+            content_div = acc_h3.find_next_sibling(attrs={"data-content": True}) \
+                or acc_h3.find_next_sibling("div")
             if not content_div:
                 continue
             table = content_div.find("table")
             if not table:
                 continue
             headers = [th.get_text(strip=True) for th in table.find_all("th")]
-            for tr in table.find_all("tr")[1:]:
+            for tr in _direct_rows(table)[1:]:
                 cells = tr.find_all("td")
                 if not cells:
                     continue
@@ -448,31 +543,16 @@ def _extract_curso(soup: BeautifulSoup, url: str) -> dict:
                     if i >= len(headers):
                         break
                     header = headers[i]
-                    # Captura URL da disciplina nas colunas de código e nome
                     link = cell.find("a", href=re.compile(r"/disciplinas/"))
                     if link:
                         row[header] = _clean(link.get_text(strip=True))
-                        row[header + "_url"] = urljoin(url, link["href"])
+                        row[header + "_url"] = _normalize_url(urljoin(url, link["href"]))
                     else:
                         row[header] = _clean(cell.get_text(strip=True))
                 if any(v not in (EMPTY, "") for k, v in row.items() if k != "semestre"):
                     matriz.append(row)
-    # Fallback: tabelas com cabeçalho relevante
-    if not matriz:
-        for table in soup.find_all("table"):
-            hdrs = " ".join(th.get_text(strip=True).lower()
-                            for th in table.find_all("th"))
-            if any(k in hdrs for k in ("disciplina", "crédito", "horas")):
-                matriz.extend(_extract_table_rows(table))
 
-    # ── Professores — seção #professores ────────────────────────────────────
-    # Estrutura real do portal:
-    #   <td class="h-card">
-    #     <a class="u-url" href="/servidores/id/XXX">
-    #       <span class="tabela-detalhe-titulo p-name">NOME</span>
-    #       <span class="p-org">UNIDADE</span>
-    #     </a>
-    #   </td>
+    # ── Professores — #professores ──────────────────────────────────────────
     professores: list[dict[str, str]] = []
     prof_sec = soup.find(id="professores")
     if prof_sec:
@@ -482,35 +562,30 @@ def _extract_curso(soup: BeautifulSoup, url: str) -> dict:
             unit_span = td.find(class_="p-org") or td.find(class_="tabela-detalhe-info")
             prof_nome = _clean(nome_span.get_text(strip=True)) if nome_span else EMPTY
             prof_unit = _clean(unit_span.get_text(strip=True)) if unit_span else EMPTY
-            prof_url  = urljoin(url, link["href"]) if link and link.get("href") else ""
+            prof_url  = _normalize_url(urljoin(url, link["href"])) \
+                if link and link.get("href") else ""
             if prof_nome != EMPTY:
                 professores.append({
                     "nome":    prof_nome,
                     "unidade": prof_unit,
                     "url":     prof_url,
-                    "lattes":  "",  # preenchido no pós-processamento via doc_completos
                 })
 
-    # ── Turmas ofertadas — seção #turmas ────────────────────────────────────
-    # Estrutura: accordion por semestre → tabela com colunas:
-    #   Disciplina / Professores / Horários | Turma | Vagas | Matric.
-    # A coluna principal tem: link da disciplina + span com professor + tooltip de horário
+    # ── Turmas ofertadas — #turmas ──────────────────────────────────────────
     turmas: list[dict] = []
     turmas_sec = soup.find(id="turmas")
     if turmas_sec:
         for table in turmas_sec.find_all("table", class_=re.compile(r"tabela-dados")):
-            for tr in table.find_all("tr")[1:]:
-                cells = tr.find_all("td")
+            for tr in _direct_rows(table)[1:]:
+                cells = tr.find_all("td", recursive=False)
                 if len(cells) < 2:
                     continue
                 disc_cell = cells[0]
-                # Extrai link + nome da disciplina (ignora tooltip aninhado)
                 disc_link = disc_cell.find("a", href=re.compile(r"/disciplinas/"))
                 if not disc_link:
                     continue
                 disc_nome = _clean(disc_link.get_text(strip=True))
-                disc_url  = urljoin(url, disc_link["href"])
-                # Extrai professores via spans .tabela-detalhe-info
+                disc_url  = _normalize_url(urljoin(url, disc_link["href"]))
                 profs_turma = [
                     _clean(sp.get_text(strip=True)
                            .replace("Professor responsável pela turma:", "")
@@ -519,582 +594,540 @@ def _extract_curso(soup: BeautifulSoup, url: str) -> dict:
                     for sp in disc_cell.find_all("span", class_="tabela-detalhe-info")
                     if sp.get_text(strip=True)
                 ]
-                # As colunas Turma / Vagas / Matric. são as últimas 3 células
-                # (a célula [0] pode ter colunas extras do tooltip aninhado)
+                horarios = _parse_horarios(disc_cell)
                 last3 = cells[-3:]
-                turma_id = _clean(last3[0].get_text(strip=True)) if len(last3) > 0 else EMPTY
-                vagas    = _clean(last3[1].get_text(strip=True)) if len(last3) > 1 else EMPTY
-                matricul = _clean(last3[2].get_text(strip=True)) if len(last3) > 2 else EMPTY
                 turmas.append({
                     "disciplina":     disc_nome,
                     "disciplina_url": disc_url,
                     "professores":    profs_turma,
-                    "turma":          turma_id,
-                    "vagas":          vagas,
-                    "matriculados":   matricul,
+                    "horarios":       horarios or [EMPTY],
+                    "turma":          _clean(last3[0].get_text(strip=True)) if len(last3) > 0 else EMPTY,
+                    "vagas":          _clean(last3[1].get_text(strip=True)) if len(last3) > 1 else EMPTY,
+                    "matriculados":   _clean(last3[2].get_text(strip=True)) if len(last3) > 2 else EMPTY,
                 })
 
-    # ── Formas de ingresso ────────────────────────────────────────────────
-    ingresso: list[str] = []
-    val = _first_valid(
-        accordions.pop("Formas de Ingresso", ""),
-        _ficha_get(ficha, "Formas de Ingresso"),
-    )
-    if val != EMPTY:
-        ingresso = [val]
-    # Vagas e Formas de Ingresso podem estar no campo da ficha-campo
-    vagas_campo = soup.find(class_="ficha-campo", string=re.compile(r"Vagas e Formas", re.I))
-    if not ingresso and vagas_campo:
-        ingresso = [_soup_text(vagas_campo)]
+    rodape = _extract_curso_rodape(soup)
+    vagas_ingresso = _extract_curso_vagas(soup)
 
     dados = {
-        "nome":              _clean(nome),
-        "nivel":             _ficha_get(ficha, "Nível / Grau", "Nível", "Grau"),
-        "modalidade":        _ficha_get(ficha, "Modalidade"),
-        "turno":             _ficha_get(ficha, "Turno"),
-        "codigo_ufpel":      _ficha_get(ficha, "Código UFPel", "Código"),
-        "codigo_emec":       _ficha_get(ficha, "Código e-MEC"),
-        "unidade":           _ficha_get(ficha, "Unidade"),
-        "coordenador":       _ficha_get(ficha, "Coordenador"),
-        "objetivos":         objetivos,
-        "contextualizacao":  accordions.pop("Contextualização", EMPTY),
-        "perfil_egresso":    accordions.pop("Perfil do Egresso", EMPTY),
-        "formas_ingresso":   ingresso or [EMPTY],
-        "matriz_curricular": matriz,
-        "professores":       professores or [{"nome": EMPTY, "unidade": EMPTY, "url": "", "lattes": ""}],
-        "turmas_ofertadas":  turmas,
-        **accordions,
+        "nome":                   _clean(nome),
+        "codigo_ufpel":           _first_valid(_ficha_get(ficha, "Código UFPel", "Código"), codigo),
+        "nivel":                  _first_valid(_ficha_get(ficha, "Nível / Grau", "Nível"), alvo.get("nivel", "")),
+        "grau":                   alvo.get("grau", EMPTY),
+        "modalidade":             _ficha_get(ficha, "Modalidade"),
+        "turno":                  _first_valid(_ficha_get(ficha, "Turno"), alvo.get("turno", "")),
+        "codigo_emec":            _ficha_get(ficha, "Código e-MEC"),
+        "codigo_capes":           _ficha_get(ficha, "Código CAPES"),
+        "unidade":                _ficha_get(ficha, "Unidade"),
+        "programa":               _ficha_get(ficha, "Programa"),
+        "coordenador":            _ficha_get(ficha, "Coordenador"),
+        "criacao_reconhecimento": _ficha_get(ficha, "Criação e Reconhecimento"),
+        "informacoes":            accordions or {"info": EMPTY},
+        "matriz_curricular":      matriz,
+        "professores":            professores,
+        "turmas_ofertadas":       turmas,
+        "conceitos_curso":        rodape["conceitos_curso"],
+        "formas_ingresso":        rodape["formas_ingresso"],
+        "vagas_por_ingresso":     vagas_ingresso or [EMPTY],
     }
 
-    # Constrói embedding_text rico para busca semântica
-    profs_texto = "\n".join(
-        f"  - {p['nome']}"
-        + (f" ({p['unidade']})" if p.get("unidade") and p["unidade"] != EMPTY else "")
-        + (f" | Lattes: {p['lattes']}" if p.get("lattes") else "")
-        for p in professores
-        if p.get("nome") and p["nome"] != EMPTY
-    ) or EMPTY
-
-    # Todas as disciplinas da grade (sem limite para busca completa)
-    disciplinas_grade = "\n".join(
-        f"  - {row.get('Disciplina / Pré-requisitos', row.get('Disciplina', ''))} "
-        f"[{row.get('semestre', '')}]"
-        f" ({row.get('Caráter', '')})"
-        for row in matriz
-        if isinstance(row, dict) and row.get("Disciplina / Pré-requisitos")
+    # ── embedding_text: resumo do curso (subabas descritivas) ───────────────
+    # Graduação usa "Contextualização"; pós-graduação usa "Apresentação"
+    contextualizacao = _first_valid(
+        accordions.get("Contextualização", ""), accordions.get("Apresentação", ""),
     )
-
-    contextualizacao = dados.get("contextualizacao", EMPTY)
-    perfil_egresso   = dados.get("perfil_egresso", EMPTY)
+    objetivos        = _first_valid(accordions.get("Objetivos", ""), accordions.get("Objetivo", ""))
+    perfil_egresso   = accordions.get("Perfil do Egresso", EMPTY)
+    area_conc        = accordions.get("Área de Concentração", EMPTY)
+    linhas_pesquisa  = accordions.get("Linhas de Pesquisa", EMPTY)
 
     partes = [
-        f"Curso de {dados['nivel']} em {dados['nome']} - UFPel",
-        f"Modalidade: {dados['modalidade']} | Turno: {dados['turno']}",
+        f"Curso: {dados['nome']} ({dados['grau']}) — UFPel",
+        f"Nível: {dados['nivel']} | Modalidade: {dados['modalidade']} | Turno: {dados['turno']}",
         f"Unidade responsável: {dados['unidade']}",
         f"Coordenador: {dados['coordenador']}",
     ]
-    if contextualizacao and contextualizacao != EMPTY:
+    if dados["programa"] != EMPTY:
+        partes.append(f"Programa: {dados['programa']}")
+    if contextualizacao != EMPTY:
         partes.append(f"\nSobre o curso:\n{contextualizacao}")
-    if objetivos and objetivos != EMPTY:
+    if objetivos != EMPTY:
         partes.append(f"\nObjetivos:\n{objetivos}")
-    if perfil_egresso and perfil_egresso != EMPTY:
+    if perfil_egresso != EMPTY:
         partes.append(f"\nPerfil do egresso:\n{perfil_egresso}")
-    if profs_texto and profs_texto != EMPTY:
-        partes.append(f"\nProfessores e docentes do curso:\n{profs_texto}")
-    if disciplinas_grade:
-        partes.append(f"\nMatriz curricular (disciplinas):\n{disciplinas_grade}")
+    if area_conc != EMPTY:
+        partes.append(f"\nÁrea de concentração:\n{area_conc}")
+    if linhas_pesquisa != EMPTY:
+        partes.append(f"\nLinhas de pesquisa:\n{linhas_pesquisa}")
 
-    embedding_text = "\n".join(partes)
-
+    # Nível da ficha já inclui o grau (ex.: "Graduação / Bacharelado",
+    # "Pós-Graduação / DOUTORADO") — diferencia Mestrado de Doutorado no título
     return {
-        "titulo":          dados["nome"],
-        "embedding_text":  embedding_text,
+        "titulo":          f"{dados['nome']} ({dados['nivel']})",
+        "embedding_text":  "\n".join(partes),
         "metadata": {
-            "url":        url,
-            "nivel":      dados["nivel"],
-            "modalidade": dados["modalidade"],
-            "unidade":    dados["unidade"],
-            "crawled_at": _now(),
+            "url":          url,
+            "codigo_ufpel": dados["codigo_ufpel"],
+            "nivel":        dados["nivel"],
+            "grau":         dados["grau"],
+            "modalidade":   dados["modalidade"],
+            "turno":        dados["turno"],
+            "unidade":      dados["unidade"],
+            "crawled_at":   _now(),
         },
         "dados_completos": dados,
     }
 
 
-def _extract_disciplina(soup: BeautifulSoup, url: str) -> dict:
-    """
-    Extrai dados de uma disciplina do portal UFPel.
+# ─────────────────────────────────────────────────────────────────────────────
+# Extrator: DISCIPLINA
+# ─────────────────────────────────────────────────────────────────────────────
 
-    Campos na ficha-dados do portal:
-      "Nome da Atividade" → nome
-      "CÓDIGO"            → codigo       (campo em maiúsculas no HTML)
-      "Carga Horária"     → carga_horaria
-      "Tipo de Atividade" → tipo_atividade
-      "Periodicidade"     → periodicidade
-      "Unidade responsável" → unidade_responsavel
-      "CRÉDITOS"          → creditos
-      "CARGA HORÁRIA TEÓRICA"    → ch_teorica
-      "CARGA HORÁRIA OBRIGATÓRIA" → ch_obrigatoria
-      "FREQUÊNCIA APROVAÇÃO"     → freq_aprovacao
+def _extract_disciplina(soup: BeautifulSoup, url: str,
+                        cursos_rel: list[str] | None = None) -> dict:
+    """
+    Extrai dados de uma disciplina:
+      - ficha-dados (informações gerais: código, carga horária, créditos, ...)
+      - #informacoes: Ementa, Objetivos, Conteúdo Programático, Bibliografia
+      - Turmas Ofertadas (tabela após heading, com horários e professores)
     """
     _strip_noise(soup)
     ficha      = _extract_ficha(soup)
     accordions = _extract_accordions(soup)
 
-    # _ficha_get faz lookup case-insensitive e ignora anotações como (*)
-    nome   = _first_valid(
+    nome = _first_valid(
         _ficha_get(ficha, "Nome da Atividade", "Nome", "Disciplina"),
         _soup_text(soup.find("h1")),
     )
-    codigo = _ficha_get(ficha, "CÓDIGO", "Código", "Código da Disciplina", "codigo")
+    codigo = _ficha_get(ficha, "CÓDIGO", "Código", "Código da Disciplina")
 
-    objetivos = _first_valid(
-        accordions.pop("Objetivos", ""),
-        accordions.pop("Objetivo", ""),
-    )
-    ementa   = accordions.pop("Ementa", EMPTY)
-    conteudo = accordions.pop("Conteúdo Programático", EMPTY)
-    biblio   = accordions.pop("Bibliografia", EMPTY)
+    ementa    = accordions.pop("Ementa", EMPTY)
+    objetivos = _first_valid(accordions.pop("Objetivos", ""), accordions.pop("Objetivo", ""))
+    conteudo  = accordions.pop("Conteúdo Programático", EMPTY)
+    biblio    = accordions.pop("Bibliografia", EMPTY)
 
-    # Equivalências
-    equiv: list[str] = []
-    equiv_val = _first_valid(
-        accordions.pop("Equivalências", ""),
-        accordions.pop("Equivalencia", ""),
-        accordions.pop("Disciplinas Equivalentes", ""),
-    )
-    if equiv_val != EMPTY:
-        equiv = [equiv_val]
-    else:
-        equiv_sec = soup.find(id=re.compile(r"equiv", re.I))
-        if equiv_sec:
-            equiv = _extract_list_items(equiv_sec.find("ul")) or [_soup_text(equiv_sec)]
-
-    # Turmas ofertadas
+    # ── Turmas ofertadas — tabela após o heading "Turmas Ofertadas" ─────────
     turmas: list[dict] = []
-    turmas_sec = soup.find(id=re.compile(r"turma", re.I))
-    if turmas_sec:
-        turmas = _extract_table_rows(turmas_sec.find("table"))
+    turmas_table = _table_after_heading(soup, r"turmas\s+ofertadas")
+    if turmas_table:
+        headers = [th.get_text(strip=True)
+                   for th in turmas_table.find_all("th")
+                   if th.find_parent("table") is turmas_table]
+        for tr in _direct_rows(turmas_table)[1:]:
+            cells = tr.find_all("td", recursive=False)
+            if len(cells) < 4:
+                continue
+            curso_cell = cells[4] if len(cells) > 4 else None
+            prof_cell  = cells[5] if len(cells) > 5 else None
+            curso_link = curso_cell.find("a", href=re.compile(r"/cursos/")) if curso_cell else None
+            professores_turma = []
+            if prof_cell:
+                professores_turma = [
+                    _clean(t) for t in prof_cell.stripped_strings
+                    if t and "responsável" not in t.lower() and "regente" not in t.lower()
+                ]
+            turmas.append({
+                "turma":        _clean(cells[0].get_text(strip=True)),
+                "periodo":      _clean(cells[1].get_text(strip=True)),
+                "vagas":        _clean(cells[2].get_text(strip=True)),
+                "matriculados": _clean(cells[3].get_text(strip=True)),
+                "curso":        _clean(curso_link.get_text(strip=True)) if curso_link
+                                else (_clean(next(iter(curso_cell.stripped_strings), ""))
+                                      if curso_cell else EMPTY),
+                "horarios":     _parse_horarios(curso_cell) if curso_cell else [EMPTY],
+                "professores":  professores_turma or [EMPTY],
+            })
 
     dados = {
-        "codigo":               codigo,
-        "nome":                 _clean(nome),
-        "tipo_atividade":       _ficha_get(ficha, "Tipo de Atividade"),
-        "periodicidade":        _ficha_get(ficha, "Periodicidade"),
-        "creditos":             _ficha_get(ficha, "CRÉDITOS", "Créditos"),
-        "carga_horaria":        _ficha_get(ficha, "Carga Horária"),
-        "ch_teorica":           _ficha_get(ficha, "CARGA HORÁRIA TEÓRICA", "Carga Horária Teórica"),
-        "ch_obrigatoria":       _ficha_get(ficha, "CARGA HORÁRIA OBRIGATÓRIA", "Carga Horária Obrigatória"),
-        "freq_aprovacao":       _ficha_get(ficha, "FREQUÊNCIA APROVAÇÃO", "Frequência Aprovação"),
-        "unidade_responsavel":  _ficha_get(ficha, "Unidade responsável", "Unidade Responsável", "Unidade"),
-        "objetivos":            objetivos,
-        "ementa":               ementa,
+        "codigo":                codigo,
+        "nome":                  _clean(nome),
+        "tipo_atividade":        _ficha_get(ficha, "Tipo de Atividade"),
+        "periodicidade":         _ficha_get(ficha, "Periodicidade"),
+        "creditos":              _ficha_get(ficha, "CRÉDITOS", "Créditos"),
+        "carga_horaria":         _ficha_get(ficha, "Carga Horária"),
+        "ch_teorica":            _ficha_get(ficha, "CARGA HORÁRIA TEÓRICA"),
+        "ch_pratica":            _ficha_get(ficha, "CARGA HORÁRIA PRÁTICA"),
+        "ch_obrigatoria":        _ficha_get(ficha, "CARGA HORÁRIA OBRIGATÓRIA"),
+        "freq_aprovacao":        _ficha_get(ficha, "FREQUÊNCIA APROVAÇÃO"),
+        "unidade_responsavel":   _ficha_get(ficha, "Unidade responsável", "Unidade"),
+        "ementa":                ementa,
+        "objetivos":             objetivos,
         "conteudo_programatico": conteudo,
-        "bibliografia":         biblio,
-        "equivalencias":        equiv or [EMPTY],
-        "turmas_ofertadas":     turmas,
+        "bibliografia":          biblio,
+        "turmas_ofertadas":      turmas,
+        "cursos_relacionados":   cursos_rel or [],
         **accordions,
     }
 
-    embedding_text = _first_valid(objetivos, ementa, _clean(nome))
+    # embedding: ementa é o "resumo" da disciplina
+    partes = [f"Disciplina: {dados['nome']} (código {codigo}) — UFPel"]
+    if ementa != EMPTY:
+        partes.append(f"Ementa: {ementa}")
+    if objetivos != EMPTY:
+        partes.append(f"Objetivos: {objetivos}")
+    if cursos_rel:
+        partes.append(f"Cursos: {', '.join(cursos_rel)}")
 
     return {
         "titulo":          dados["nome"],
-        "embedding_text":  embedding_text,
+        "embedding_text":  "\n".join(partes),
         "metadata": {
             "url":        url,
             "codigo":     codigo,
             "unidade":    dados["unidade_responsavel"],
+            "cursos":     ", ".join(cursos_rel or []),
             "crawled_at": _now(),
         },
         "dados_completos": dados,
     }
 
 
-def _extract_projeto(soup: BeautifulSoup, url: str) -> dict | None:
-    """Retorna None se o projeto não for vigente."""
-    _strip_noise(soup)
-    ficha      = _extract_ficha(soup)
-    accordions = _extract_accordions(soup)
+# ─────────────────────────────────────────────────────────────────────────────
+# Extrator: PROFESSOR (SERVIDOR)
+# ─────────────────────────────────────────────────────────────────────────────
 
-    titulo = _first_valid(
-        ficha.get("Título", ""),
-        ficha.get("Nome", ""),
+def _extract_lattes(soup: BeautifulSoup) -> dict[str, Any]:
+    """
+    Extrai o currículo (#lattes): Resumo, Formação acadêmica, Áreas de
+    atuação e demais seções, cada uma sob um <h3>.
+    """
+    resultado: dict[str, Any] = {
+        "resumo":            EMPTY,
+        "formacao_academica": [EMPTY],
+        "areas_atuacao":     [EMPTY],
+        "lattes_url":        EMPTY,
+    }
+    sec = soup.find(id="lattes")
+    if not sec:
+        return resultado
+
+    link = sec.find("a", href=re.compile(r"lattes\.cnpq", re.I))
+    if link:
+        resultado["lattes_url"] = link["href"]
+
+    for h3 in sec.find_all("h3"):
+        label = h3.get_text(strip=True).lower()
+        textos: list[str] = []
+        itens:  list[str] = []
+        for sib in h3.next_siblings:
+            if getattr(sib, "name", None) == "h3":
+                break
+            if hasattr(sib, "get_text"):
+                t = _clean(sib.get_text(" ", strip=True))
+                if t not in (EMPTY,) and "extraídas do lattes" not in t.lower():
+                    textos.append(t)
+                    itens.extend(x for x in _split_lines(sib)
+                                 if "extraídas do lattes" not in x.lower())
+            elif isinstance(sib, str) and sib.strip():
+                textos.append(_clean(sib))
+                itens.append(_clean(sib))
+
+        if not textos:
+            continue
+        if "resumo" in label:
+            resultado["resumo"] = " ".join(textos)
+        elif "formação" in label or "formacao" in label:
+            resultado["formacao_academica"] = itens or textos
+        elif "área" in label or "area" in label or "atuação" in label:
+            resultado["areas_atuacao"] = itens or textos
+        else:
+            resultado[h3.get_text(strip=True)] = " ".join(textos)
+
+    return resultado
+
+
+def _extract_servidor_projetos(soup: BeautifulSoup, url: str) -> list[dict]:
+    """
+    Extrai os projetos do servidor (#projetos), mantendo APENAS os ativos
+    (data final vazia ou >= hoje). Cada tabela vem precedida de um heading
+    com a ênfase (Extensão, Pesquisa, Ensino).
+    """
+    sec = soup.find(id="projetos")
+    if not sec:
+        return []
+
+    projetos: dict[str, dict] = {}
+    for table in sec.find_all("table"):
+        # A ênfase (Extensão / Pesquisa / Ensino) é o primeiro <th> da tabela
+        primeiro_th = table.find("th")
+        enfase = _clean(primeiro_th.get_text(strip=True)) if primeiro_th else EMPTY
+        for tr in _direct_rows(table)[1:]:
+            cells = tr.find_all("td", recursive=False)
+            if not cells:
+                continue
+            link = cells[0].find("a", href=re.compile(r"/projetos/"))
+            if not link:
+                continue
+            titulo   = _clean(link.get_text(strip=True))
+            proj_url = _normalize_url(urljoin(url, link["href"]))
+            inicio   = _clean(cells[1].get_text(strip=True)) if len(cells) > 1 else EMPTY
+            fim      = _clean(cells[2].get_text(strip=True)) if len(cells) > 2 else EMPTY
+            ch       = _clean(cells[3].get_text(strip=True)) if len(cells) > 3 else EMPTY
+
+            if not _is_vigente(fim if fim != EMPTY else ""):
+                continue
+
+            atual = projetos.get(proj_url)
+            novo = {
+                "titulo":      titulo,
+                "url":         proj_url,
+                "enfase":      enfase,
+                "data_inicio": inicio,
+                "data_fim":    fim,
+                "ch_semanal":  ch,
+            }
+            # Linhas duplicadas por vínculo: mantém a com mais informação (CH)
+            if atual is None or (atual.get("ch_semanal") == EMPTY and ch != EMPTY):
+                projetos[proj_url] = novo
+
+    return list(projetos.values())
+
+
+def _extract_servidor_disciplinas(soup: BeautifulSoup, url: str) -> list[dict]:
+    """
+    Extrai as disciplinas ministradas (#disciplinas) nos últimos semestres:
+    Ano/Semestre, Turma, Disciplina (com URL), CH, Curso e horários.
+    """
+    sec = soup.find(id="disciplinas")
+    if not sec:
+        return []
+
+    ministradas: list[dict] = []
+    for table in sec.find_all("table"):
+        if table.find_parent("table"):
+            continue  # tabelas de horários aninhadas
+        for tr in _direct_rows(table)[1:]:
+            cells = tr.find_all("td", recursive=False)
+            if len(cells) < 3:
+                continue
+            disc_cell = next((c for c in cells if c.find("a", href=re.compile(r"/disciplinas/"))), None)
+            if not disc_cell:
+                continue
+            disc_link  = disc_cell.find("a", href=re.compile(r"/disciplinas/"))
+            curso_cell = next((c for c in cells if c.find("a", href=re.compile(r"/cursos/"))), None)
+            curso_link = curso_cell.find("a", href=re.compile(r"/cursos/")) if curso_cell else None
+            ministradas.append({
+                "ano_semestre":   _clean(cells[0].get_text(strip=True)),
+                "turma":          _clean(cells[1].get_text(strip=True)),
+                "disciplina":     _clean(disc_link.get_text(strip=True)),
+                "disciplina_url": _normalize_url(urljoin(url, disc_link["href"])),
+                "horarios":       _parse_horarios(disc_cell) or [EMPTY],
+                "carga_horaria":  _clean(cells[-2].get_text(strip=True)) if len(cells) >= 2 else EMPTY,
+                "curso":          _clean(curso_link.get_text(strip=True)) if curso_link else EMPTY,
+            })
+    return ministradas
+
+
+def _extract_servidor(soup: BeautifulSoup, url: str,
+                      cursos_rel: list[str] | None = None) -> dict | None:
+    """
+    Extrai dados de um professor/servidor. Retorna None se a situação
+    funcional NÃO estiver ativa (registros antigos de vínculos encerrados).
+    """
+    _strip_noise(soup)
+    ficha = _extract_ficha(soup)
+
+    nome = _first_valid(
+        _ficha_get(ficha, "Nome do Servidor", "Nome"),
         _soup_text(soup.find("h1")),
     )
-    resumo = _first_valid(
-        ficha.get("Resumo", ""),
-        accordions.get("Resumo", ""),
-    )
-    data_inicio = _first_valid(
-        ficha.get("Data de Início", ""),
-        ficha.get("Data Início", ""),
-        ficha.get("Início", ""),
-    )
-    data_fim = _first_valid(
-        ficha.get("Data de Término", ""),
-        ficha.get("Data Fim", ""),
-        ficha.get("Término", ""),
-        ficha.get("Fim", ""),
-    )
-    situacao = _first_valid(ficha.get("Situação", ""), ficha.get("Status", ""))
+    situacao = _ficha_get(ficha, "Situação")
 
-    if not _is_vigente(data_fim, situacao):
-        log.debug("Não vigente (data_fim=%s) — %s", data_fim, url[:70])
+    if situacao != EMPTY and not _is_situacao_ativa(situacao):
+        log.debug("Servidor com situação inativa (%s) — ignorado: %s", situacao, nome)
         return None
 
-    # Equipe
-    equipe: list[str] = []
-    equipe_sec = (
-        soup.find(id=re.compile(r"equipe|membro|participante", re.I))
-        or soup.find(class_=re.compile(r"equipe|membro", re.I))
-    )
-    if equipe_sec:
-        equipe = _extract_list_items(equipe_sec.find("ul"))
-        if not equipe:
-            for row in _extract_table_rows(equipe_sec.find("table")):
-                line = " — ".join(v for v in row.values() if v != EMPTY)
-                if line:
-                    equipe.append(line)
+    lattes      = _extract_lattes(soup)
+    projetos    = _extract_servidor_projetos(soup, url)
+    ministradas = _extract_servidor_disciplinas(soup, url)
 
-    # Financeiro
-    financeiro: dict[str, str] = {}
-    fin_sec = soup.find(id=re.compile(r"financ|orcamento|orçamento|budget", re.I))
+    dados = {
+        "nome":                 _clean(nome),
+        "matricula_siape":      _ficha_get(ficha, "Matrícula SIAPE", "Matrícula"),
+        "categoria":            _ficha_get(ficha, "Categoria"),
+        "cargo":                _ficha_get(ficha, "Cargo", "Função"),
+        "classe_nivel":         _ficha_get(ficha, "Classe / Nível"),
+        "titulacao":            _ficha_get(ficha, "Titulação"),
+        "lotacao":              _ficha_get(ficha, "Lotação", "Unidade"),
+        "regime_jornada":       _ficha_get(ficha, "Regime / Jornada de Trabalho", "Regime de Trabalho"),
+        "situacao":             situacao,
+        "data_ingresso_servico": _ficha_get(ficha, "Data de ingresso no serviço público"),
+        "data_ingresso_ufpel":  _ficha_get(ficha, "Data de ingresso na UFPel"),
+        "data_ingresso_cargo":  _ficha_get(ficha, "Data de ingresso no cargo"),
+        "email":                _ficha_get(ficha, "E-mail", "Contato"),
+        "curriculo_resumo":     lattes["resumo"],
+        "formacao_academica":   lattes["formacao_academica"],
+        "areas_atuacao":        lattes["areas_atuacao"],
+        "lattes_url":           lattes["lattes_url"],
+        "projetos_ativos":      projetos or [EMPTY],
+        "disciplinas_ministradas": ministradas or [EMPTY],
+        "cursos_relacionados":  cursos_rel or [],
+    }
+
+    # embedding: resumo do currículo + áreas de atuação
+    partes = [f"Professor(a): {dados['nome']} — UFPel"]
+    if dados["cargo"] != EMPTY:
+        partes.append(f"Cargo: {dados['cargo']} | Titulação: {dados['titulacao']}")
+    if dados["lotacao"] != EMPTY:
+        partes.append(f"Lotação: {dados['lotacao']}")
+    if lattes["resumo"] != EMPTY:
+        partes.append(f"\nResumo do currículo:\n{lattes['resumo']}")
+    if lattes["areas_atuacao"] != [EMPTY]:
+        partes.append("\nÁreas de atuação:\n" +
+                      "\n".join(f"  - {a}" for a in lattes["areas_atuacao"]))
+    if cursos_rel:
+        partes.append(f"\nProfessor(a) dos cursos: {', '.join(cursos_rel)}")
+
+    return {
+        "titulo":          dados["nome"],
+        "embedding_text":  "\n".join(partes),
+        "metadata": {
+            "url":        url,
+            "matricula":  dados["matricula_siape"],
+            "cargo":      dados["cargo"],
+            "titulacao":  dados["titulacao"],
+            "lotacao":    dados["lotacao"],
+            "situacao":   situacao,
+            "cursos":     ", ".join(cursos_rel or []),
+            "crawled_at": _now(),
+        },
+        "dados_completos": dados,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Extrator: PROJETO
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _extract_projeto(soup: BeautifulSoup, url: str,
+                     professores_rel: list[str] | None = None) -> dict | None:
+    """
+    Extrai dados de um projeto. Retorna None se o projeto NÃO estiver ativo
+    (data final < hoje).
+
+    Captura:
+      - ficha-dados (informações gerais: nome, ênfase, datas, coordenador...)
+      - #informacoes: accordions (Objetivo Geral, etc.)
+      - #equipe: apenas membros vigentes (data final vazia ou >= hoje)
+      - #financeiro: dados financeiros ou "Não há informações disponíveis"
+    """
+    _strip_noise(soup)
+    ficha = _extract_ficha(soup)
+
+    titulo = _first_valid(
+        _ficha_get(ficha, "Nome do Projeto", "Título", "Nome"),
+        _soup_text(soup.find("h1")),
+    )
+
+    # "Data inicial - Data final" vem num único campo
+    periodo = _ficha_get(ficha, "Data inicial - Data final")
+    datas   = re.findall(r"\d{2}/\d{2}/\d{4}", periodo)
+    data_inicio = datas[0] if datas else _ficha_get(ficha, "Data de Início", "Início")
+    data_fim    = datas[1] if len(datas) > 1 else _ficha_get(ficha, "Data de Término", "Fim")
+
+    if data_fim != EMPTY and not _is_vigente(data_fim):
+        log.debug("Projeto não ativo (fim=%s) — ignorado: %s", data_fim, titulo[:60])
+        return None
+
+    resumo     = _ficha_get(ficha, "Resumo")
+    accordions = _extract_accordions(soup)
+
+    # ── Equipe: apenas membros vigentes ─────────────────────────────────────
+    equipe: list[dict] = []
+    equipe_sec = soup.find(id="equipe")
+    if equipe_sec:
+        vistos: set[str] = set()
+        for table in equipe_sec.find_all("table"):
+            for tr in _direct_rows(table)[1:]:
+                cells = tr.find_all("td", recursive=False)
+                if not cells:
+                    continue
+                nome_membro = _clean(cells[0].get_text(strip=True))
+                if nome_membro == EMPTY:
+                    continue
+                ch        = _clean(cells[1].get_text(strip=True)) if len(cells) > 1 else EMPTY
+                d_inicio  = _clean(cells[2].get_text(strip=True)) if len(cells) > 2 else EMPTY
+                d_fim     = _clean(cells[3].get_text(strip=True)) if len(cells) > 3 else EMPTY
+                if not _is_vigente(d_fim if d_fim != EMPTY else ""):
+                    continue
+                link = cells[0].find("a", href=re.compile(r"/servidores/"))
+                chave = nome_membro.lower()
+                membro = {
+                    "nome":        nome_membro,
+                    "url":         _normalize_url(urljoin(url, link["href"])) if link else "",
+                    "ch_semanal":  ch,
+                    "data_inicio": d_inicio,
+                    "data_fim":    d_fim,
+                }
+                if chave not in vistos:
+                    vistos.add(chave)
+                    equipe.append(membro)
+                elif ch != EMPTY:
+                    # linha duplicada com mais informação substitui a anterior
+                    for i, m in enumerate(equipe):
+                        if m["nome"].lower() == chave and m["ch_semanal"] == EMPTY:
+                            equipe[i] = membro
+                            break
+
+    # ── Financeiro ──────────────────────────────────────────────────────────
+    financeiro: dict[str, Any] = {"info": EMPTY}
+    fin_sec = soup.find(id="financeiro")
     if fin_sec:
-        financeiro = _extract_ficha(fin_sec) or {"info": _soup_text(fin_sec)}
+        fin_ficha  = _extract_ficha(fin_sec)
+        fin_tables = [r for t in fin_sec.find_all("table") for r in _extract_table_rows(t)]
+        fin_texto  = _soup_text(fin_sec)
+        if fin_ficha:
+            financeiro = fin_ficha
+        elif fin_tables:
+            financeiro = {"registros": fin_tables}
+        elif fin_texto != EMPTY:
+            financeiro = {"info": fin_texto}
 
     skip_keys = {
-        "Título", "Nome", "Resumo", "Data de Início", "Data Início",
-        "Início", "Data de Término", "Data Fim", "Término", "Fim",
-        "Situação", "Status", "Coordenador", "Área", "Unidade",
+        "Nome do Projeto", "Título", "Nome", "Resumo",
+        "Data inicial - Data final", "Data de Início", "Início",
+        "Data de Término", "Fim", "Coordenador Atual", "Coordenador",
+        "Ênfase", "Área CNPq", "Unidade de Origem",
+        "Eixo Temático (Principal - Afim)", "Linha de Extensão",
     }
     dados = {
-        "titulo":       _clean(titulo),
-        "resumo":       resumo,
-        "data_inicio":  data_inicio,
-        "data_fim":     data_fim,
-        "situacao":     situacao,
-        "coordenador":  ficha.get("Coordenador", EMPTY),
-        "area":         ficha.get("Área", EMPTY),
-        "unidade":      ficha.get("Unidade", EMPTY),
-        "equipe":       equipe or [EMPTY],
-        "financeiro":   financeiro or {"info": EMPTY},
+        "titulo":          _clean(titulo),
+        "resumo":          resumo,
+        "enfase":          _ficha_get(ficha, "Ênfase"),
+        "data_inicio":     data_inicio,
+        "data_fim":        data_fim,
+        "situacao":        "Ativo",
+        "coordenador":     _ficha_get(ficha, "Coordenador Atual", "Coordenador"),
+        "unidade_origem":  _ficha_get(ficha, "Unidade de Origem", "Unidade"),
+        "area_cnpq":       _ficha_get(ficha, "Área CNPq", "Área"),
+        "eixo_tematico":   _ficha_get(ficha, "Eixo Temático (Principal - Afim)"),
+        "linha_extensao":  _ficha_get(ficha, "Linha de Extensão"),
+        "informacoes":     accordions or {"info": EMPTY},
+        "equipe_vigente":  equipe or [EMPTY],
+        "financeiro":      financeiro,
+        "professores_relacionados": professores_rel or [],
         **{k: v for k, v in ficha.items() if k not in skip_keys},
     }
 
+    # embedding: resumo do projeto
+    partes = [f"Projeto ({dados['enfase']}): {dados['titulo']} — UFPel"]
+    if resumo != EMPTY:
+        partes.append(f"Resumo: {resumo}")
+    partes.append(f"Coordenador: {dados['coordenador']} | Unidade: {dados['unidade_origem']}")
+
     return {
         "titulo":          dados["titulo"],
-        "embedding_text":  _first_valid(resumo, _clean(titulo)),
+        "embedding_text":  "\n".join(partes),
         "metadata": {
             "url":         url,
+            "enfase":      dados["enfase"],
             "data_inicio": data_inicio,
             "data_fim":    data_fim,
-            "situacao":    situacao,
+            "situacao":    "Ativo",
             "coordenador": dados["coordenador"],
             "crawled_at":  _now(),
         },
         "dados_completos": dados,
-    }
-
-
-def _is_vigente(data_fim_str: str, situacao: str = "") -> bool:
-    """
-    Retorna True se o projeto for vigente.
-    Critério: data_fim >= hoje OU status indica projeto ativo.
-    Projetos sem data_fim e sem status negativo são incluídos.
-    """
-    today = date.today()
-    sit_lower = situacao.lower()
-
-    encerrados = {"concluído", "concluido", "encerrado", "finalizado",
-                  "cancelado", "suspenso", "inativo"}
-    vigentes   = {"em execução", "ativo", "em andamento", "vigente",
-                  "aberto", "aprovado", "em vigor"}
-
-    if any(v in sit_lower for v in encerrados):
-        d = _parse_date(data_fim_str)
-        return bool(d and d >= today)
-
-    if any(v in sit_lower for v in vigentes):
-        return True
-
-    d = _parse_date(data_fim_str)
-    if d:
-        return d >= today
-
-    # Sem data_fim e sem status negativo: inclui por padrão
-    return True
-
-
-def _extract_servidor(soup: BeautifulSoup, url: str) -> dict:
-    _strip_noise(soup)
-    ficha = _extract_ficha(soup)
-
-    nome     = _first_valid(
-        ficha.get("Nome do Servidor", ""),
-        ficha.get("Nome", ""),
-        _soup_text(soup.find("h1")),
-    )
-    matricula = ficha.get("Matrícula", EMPTY)
-    cargo     = _first_valid(ficha.get("Cargo", ""), ficha.get("Função", ""))
-    lotacao   = _first_valid(
-        ficha.get("Lotação", ""),
-        ficha.get("Unidade de Lotação", ""),
-        ficha.get("Unidade", ""),
-    )
-    regime = _first_valid(
-        ficha.get("Regime de Trabalho", ""),
-        ficha.get("Regime", ""),
-    )
-
-    # Currículo Lattes — seção #lattes
-    curriculo_text = EMPTY
-    lattes_url     = EMPTY
-    lattes_sec     = soup.find(id="lattes")
-    if lattes_sec:
-        link = lattes_sec.find("a", href=re.compile(r"lattes\.cnpq", re.I))
-        if link:
-            lattes_url = link["href"]
-        parts: list[str] = []
-        for h3 in lattes_sec.find_all("h3"):
-            label = h3.get_text(strip=True)
-            sib_texts: list[str] = []
-            for sib in h3.next_siblings:
-                if getattr(sib, "name", None) == "h3":
-                    break
-                if hasattr(sib, "get_text"):
-                    t = _clean(sib.get_text(strip=True))
-                    if t not in (EMPTY, "Informações extraídas do Currículo Lattes"):
-                        sib_texts.append(t)
-            if sib_texts:
-                parts.append(f"{label}: {' '.join(sib_texts)}")
-        curriculo_text = _clean("\n".join(parts)) if parts else EMPTY
-
-    # PGD (Programa de Gestão e Desempenho)
-    pgd_text = EMPTY
-    pgd_sec  = soup.find(id=re.compile(r"\bpgd\b", re.I))
-    if pgd_sec:
-        pgd_text = _soup_text(pgd_sec)
-
-    # Projetos vigentes vinculados ao servidor
-    projetos_vigentes: list[dict[str, str]] = []
-    proj_sec = soup.find(id=re.compile(r"projeto", re.I))
-    if proj_sec:
-        for a in proj_sec.find_all("a", href=True):
-            if "/projetos/id/" in a["href"]:
-                projetos_vigentes.append({
-                    "titulo": _clean(a.get_text(strip=True)),
-                    "url":    _normalize_url(urljoin(url, a["href"])),
-                })
-
-    skip_keys = {
-        "Nome do Servidor", "Nome", "Matrícula", "Cargo", "Função",
-        "Lotação", "Unidade de Lotação", "Unidade",
-        "Regime de Trabalho", "Regime", "Contato", "E-mail",
-    }
-    dados = {
-        "nome":              _clean(nome),
-        "matricula":         matricula,
-        "cargo":             cargo,
-        "lotacao":           lotacao,
-        "regime":            regime,
-        "contato":           ficha.get("Contato", EMPTY),
-        "email":             ficha.get("E-mail", EMPTY),
-        "curriculo":         curriculo_text,
-        "lattes_url":        lattes_url,
-        "pgd":               pgd_text,
-        "projetos_vigentes": projetos_vigentes,
-        **{k: v for k, v in ficha.items() if k not in skip_keys},
-    }
-
-    # Extrai campos estruturados do currículo Lattes para o embedding
-    areas      = dados.get("Áreas de atuação", dados.get("Área de Atuação", EMPTY))
-    titulacao  = dados.get("Titulação", dados.get("Título", EMPTY))
-    resumo_lattes = EMPTY
-    if curriculo_text != EMPTY:
-        # Tenta isolar o Resumo dentro do curriculo_text
-        import re as _re
-        m = _re.search(r"Resumo[:\s]+(.+?)(?=\n[A-ZÁÉÍÓÚÃÕÂÊÔÇ][a-záéíóúãõâêôç]|$)",
-                       curriculo_text, _re.DOTALL)
-        resumo_lattes = m.group(1).strip() if m else curriculo_text
-
-    partes_serv = [f"Professor/Servidor: {_clean(nome)}"]
-    if cargo and cargo != EMPTY:
-        partes_serv.append(f"Cargo: {cargo}")
-    if lotacao and lotacao != EMPTY:
-        partes_serv.append(f"Lotação/Unidade: {lotacao}")
-    if titulacao and titulacao != EMPTY:
-        partes_serv.append(f"Titulação: {titulacao}")
-    if areas and areas != EMPTY:
-        partes_serv.append(f"\nÁreas de atuação:\n{areas}")
-    if resumo_lattes and resumo_lattes != EMPTY:
-        partes_serv.append(f"\nResumo:\n{resumo_lattes}")
-
-    embedding_text = "\n".join(partes_serv) if len(partes_serv) > 1 else _clean(nome)
-
-    return {
-        "titulo":          dados["nome"],
-        "embedding_text":  embedding_text,
-        "metadata": {
-            "url":        url,
-            "matricula":  matricula,
-            "cargo":      cargo,
-            "lotacao":    lotacao,
-            "crawled_at": _now(),
-        },
-        "dados_completos": dados,
-    }
-
-
-def _extract_unidade(soup: BeautifulSoup, url: str) -> dict:
-    _strip_noise(soup)
-    ficha      = _extract_ficha(soup)
-    accordions = _extract_accordions(soup)
-
-    nome  = _first_valid(
-        ficha.get("Nome da Unidade", ""),
-        ficha.get("Unidade", ""),
-        ficha.get("Nome", ""),
-        _soup_text(soup.find("h1")),
-    )
-    sigla = ficha.get("Sigla", EMPTY)
-
-    # Estrutura organizacional
-    estrutura_sec = soup.find(id=re.compile(r"estrutura|organograma", re.I))
-    estrutura = _soup_text(estrutura_sec) if estrutura_sec \
-        else accordions.pop("Estrutura", EMPTY)
-
-    # Graduação e Pós-Graduação
-    grad_sec    = soup.find(id=re.compile(r"graduacao|graduação", re.I))
-    posgrad_sec = soup.find(id=re.compile(r"pos.grad|pós.grad", re.I))
-    graduacao   = _soup_text(grad_sec)    if grad_sec    else accordions.pop("Graduação",     EMPTY)
-    pos_grad    = _soup_text(posgrad_sec) if posgrad_sec else accordions.pop("Pós-Graduação", EMPTY)
-
-    # Orçamento
-    orc_sec   = soup.find(id=re.compile(r"orçamento|orcamento|budget", re.I))
-    orcamento = _soup_text(orc_sec) if orc_sec else accordions.pop("Orçamento", EMPTY)
-
-    # Servidores da unidade
-    servidores: list[str] = []
-    serv_sec = soup.find(id=re.compile(r"servidor|membro|equipe|quadro", re.I))
-    if serv_sec:
-        servidores = _extract_list_items(serv_sec.find("ul"))
-        if not servidores:
-            for row in _extract_table_rows(serv_sec.find("table")):
-                servidores.append(next(iter(row.values()), EMPTY))
-
-    # Telefones e contatos
-    telefones: list[str] = []
-    tel_sec = soup.find(id=re.compile(r"telefone|contato|fone", re.I))
-    if tel_sec:
-        telefones = _extract_list_items(tel_sec.find("ul"))
-        if not telefones:
-            for m in re.findall(r"\(?\d{2}\)?\s*\d{4,5}[-.\s]?\d{4}",
-                                tel_sec.get_text()):
-                telefones.append(m.strip())
-
-    skip_keys = {
-        "Nome da Unidade", "Unidade", "Nome", "Sigla",
-        "Diretor", "Diretor Geral", "E-mail", "Endereço",
-    }
-    dados = {
-        "nome":          _clean(nome),
-        "sigla":         sigla,
-        "estrutura":     estrutura,
-        "graduacao":     graduacao,
-        "pos_graduacao": pos_grad,
-        "orcamento":     orcamento,
-        "diretor":       _first_valid(
-            ficha.get("Diretor", ""),
-            ficha.get("Diretor Geral", ""),
-        ),
-        "email":         ficha.get("E-mail", EMPTY),
-        "endereco":      ficha.get("Endereço", EMPTY),
-        "servidores":    servidores or [EMPTY],
-        "telefones":     telefones or [EMPTY],
-        **{k: v for k, v in ficha.items() if k not in skip_keys},
-        **accordions,
-    }
-
-    emb_parts = [p for p in (_clean(nome), sigla, estrutura) if p != EMPTY]
-
-    return {
-        "titulo":          dados["nome"],
-        "embedding_text":  " ".join(emb_parts) or EMPTY,
-        "metadata": {
-            "url":        url,
-            "sigla":      sigla,
-            "diretor":    dados["diretor"],
-            "crawled_at": _now(),
-        },
-        "dados_completos": dados,
-    }
-
-
-def _extract_gestao(soup: BeautifulSoup, url: str) -> dict:
-    _strip_noise(soup)
-    main = (
-        soup.find("main")
-        or soup.find(id=re.compile(r"conteudo|content|main", re.I))
-        or soup.find(class_=re.compile(r"conteudo|content|main", re.I))
-        or soup.find("body")
-    )
-    full_text = _soup_text(main)
-
-    # Sub-seções: Reitoria, Vice-Reitoria, Pró-Reitorias, Direções, etc.
-    secoes: dict[str, str] = {}
-    if main:
-        for heading in main.find_all(["h2", "h3"]):
-            label = heading.get_text(strip=True)
-            parts: list[str] = []
-            for sib in heading.next_siblings:
-                if getattr(sib, "name", None) in ("h2", "h3"):
-                    break
-                if hasattr(sib, "get_text"):
-                    t = _clean(sib.get_text(strip=True))
-                    if t != EMPTY:
-                        parts.append(t)
-            if parts:
-                secoes[label] = " ".join(parts)
-
-    return {
-        "titulo":          "Gestão Institucional — UFPel",
-        "embedding_text":  full_text,
-        "metadata":        {"url": url, "crawled_at": _now()},
-        "dados_completos": {"texto": full_text, "secoes": secoes},
-    }
-
-
-def _extract_sobre(soup: BeautifulSoup, url: str) -> dict:
-    _strip_noise(soup)
-    main = (
-        soup.find("main")
-        or soup.find(id=re.compile(r"conteudo|content|main", re.I))
-        or soup.find(class_=re.compile(r"conteudo|content|main", re.I))
-        or soup.find("body")
-    )
-    full_text = _soup_text(main)
-
-    # Sub-seções: História, Missão, Visão, Valores, etc.
-    secoes: dict[str, str] = {}
-    if main:
-        for heading in main.find_all(["h2", "h3"]):
-            label = heading.get_text(strip=True)
-            parts: list[str] = []
-            for sib in heading.next_siblings:
-                if getattr(sib, "name", None) in ("h2", "h3"):
-                    break
-                if hasattr(sib, "get_text"):
-                    t = _clean(sib.get_text(strip=True))
-                    if t != EMPTY:
-                        parts.append(t)
-            if parts:
-                secoes[label] = " ".join(parts)
-
-    return {
-        "titulo":          "Sobre a UFPel",
-        "embedding_text":  full_text,
-        "metadata":        {"url": url, "crawled_at": _now()},
-        "dados_completos": {"texto": full_text, "secoes": secoes},
     }
 
 
@@ -1114,159 +1147,210 @@ def _build_doc(tipo: str, extracted: dict) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Crawler principal (assíncrono)
+# Crawler principal (assíncrono) — deep-crawl dos cursos alvo
 # ─────────────────────────────────────────────────────────────────────────────
 
 class UFPelCrawler:
     """
-    Crawler assíncrono do Portal Institucional UFPel.
+    Deep-crawler dos cursos de Computação da UFPel.
 
     Estratégia RAG:
-      1. Busca vetorial (campo embedding_text)
-      2. Recuperação dos documentos mais relevantes pelo ID
-      3. Consulta ao banco para dados_completos
-      4. Envio ao LLM para síntese da resposta
-
-    Exemplo:
-      "Quais disciplinas existem no curso de Ciência da Computação?"
-      → busca vetorial encontra o curso
-      → recupera dados_completos: matriz_curricular, professores, turmas
-      → LLM sintetiza a resposta com contexto completo
+      1. Busca vetorial (embedding_text = resumo de cada registro)
+      2. Recuperação dos documentos mais relevantes pelo doc_id
+      3. Consulta SQL em doc_completos (JSONB) para os dados estruturados
+      4. Envio ao LLM para síntese da resposta com contexto completo
     """
 
     def __init__(
         self,
         concurrency: int = DEFAULT_CONCURRENCY,
         delay: float = DEFAULT_DELAY,
+        cursos: list[str] | None = None,
     ):
         self._concurrency = concurrency
         self._delay       = delay
+        self._cursos      = cursos or list(TARGET_CURSOS.keys())
 
-    async def _crawl_listed_section(
-        self,
-        tipo: str,
-        listing_url: str,
-        url_pattern: str,
-        extractor: Callable,
-        limit: int | None = None,
+    # ── Fase 1: cursos ───────────────────────────────────────────────────────
+    async def _crawl_cursos(
+        self, client: RateLimitedClient,
+    ) -> tuple[list[dict], dict[str, set[str]], dict[str, set[str]]]:
+        """
+        Retorna (docs, disciplina_urls→cursos, professor_urls→cursos).
+        Os dicts mapeiam cada URL para o conjunto de nomes de cursos que a
+        referenciam (vira metadado 'cursos' nos docs de disciplina/professor).
+        """
+        docs: list[dict] = []
+        disc_urls: dict[str, set[str]] = {}
+        prof_urls: dict[str, set[str]] = {}
+
+        async def _one(codigo: str) -> None:
+            url  = f"{BASE_URL}/cursos/cod/{codigo}"
+            soup = await client.fetch(url)
+            if soup is None:
+                log.error("[CURSO %s] Página indisponível.", codigo)
+                return
+            try:
+                extracted = _extract_curso(soup, url, codigo)
+            except Exception as exc:
+                log.error("[CURSO %s] Erro na extração: %s", codigo, exc)
+                return
+            doc = _build_doc("curso", extracted)
+            docs.append(doc)
+
+            rotulo = doc["titulo"]
+            dados  = doc["dados_completos"]
+            for row in dados.get("matriz_curricular", []):
+                for k, v in row.items():
+                    if k.endswith("_url") and "/disciplinas/" in v:
+                        disc_urls.setdefault(v, set()).add(rotulo)
+            for turma in dados.get("turmas_ofertadas", []):
+                u = turma.get("disciplina_url", "")
+                if u:
+                    disc_urls.setdefault(u, set()).add(rotulo)
+            for prof in dados.get("professores", []):
+                u = prof.get("url", "")
+                if u:
+                    prof_urls.setdefault(u, set()).add(rotulo)
+
+            log.info("[CURSO %s] %s — %d disciplinas na matriz, %d professores, %d turmas",
+                     codigo, rotulo,
+                     len(dados.get("matriz_curricular", [])),
+                     len(dados.get("professores", [])),
+                     len(dados.get("turmas_ofertadas", [])))
+
+        await asyncio.gather(*[_one(c) for c in self._cursos])
+        return docs, disc_urls, prof_urls
+
+    # ── Fase 2: disciplinas ─────────────────────────────────────────────────
+    async def _crawl_disciplinas(
+        self, client: RateLimitedClient, disc_urls: dict[str, set[str]],
     ) -> list[dict]:
-        async with RateLimitedClient(self._concurrency, self._delay) as client:
-            urls = await get_listing_urls(client, listing_url, url_pattern)
-            if limit is not None:
-                urls = urls[:limit]
-            log.info("[%s] Processando %d itens...", tipo.upper(), len(urls))
+        docs: list[dict] = []
+        vistos_codigo: set[str] = set()
 
-            tasks = [
-                self._process_item(client, url, tipo, extractor)
-                for url in urls
-            ]
-            results = await asyncio.gather(*tasks)
+        async def _one(url: str, cursos_rel: list[str]) -> None:
+            soup = await client.fetch(url)
+            if soup is None:
+                return
+            try:
+                extracted = _extract_disciplina(soup, url, cursos_rel)
+            except Exception as exc:
+                log.error("[DISCIPLINA] Erro em %s: %s", url[:70], exc)
+                return
+            codigo = extracted["metadata"].get("codigo", "")
+            if codigo != EMPTY and codigo in vistos_codigo:
+                return
+            vistos_codigo.add(codigo)
+            docs.append(_build_doc("disciplina", extracted))
 
-        docs = [r for r in results if r is not None]
-        log.info("[%s] %d/%d documentos coletados.", tipo.upper(), len(docs), len(urls))
+        await asyncio.gather(*[
+            _one(url, sorted(cursos)) for url, cursos in sorted(disc_urls.items())
+        ])
         return docs
 
-    async def _process_item(
-        self,
-        client: RateLimitedClient,
-        url: str,
-        tipo: str,
-        extractor: Callable,
-    ) -> dict | None:
-        soup = await client.fetch(url)
-        if soup is None:
-            return None
-        try:
-            extracted = extractor(soup, url)
-            if extracted is None:
-                return None
-            return _build_doc(tipo, extracted)
-        except Exception as exc:
-            log.error("[%s] Erro ao extrair %s: %s", tipo, url[:70], exc)
-            return None
+    # ── Fase 3: professores ─────────────────────────────────────────────────
+    async def _crawl_professores(
+        self, client: RateLimitedClient, prof_urls: dict[str, set[str]],
+    ) -> tuple[list[dict], dict[str, set[str]]]:
+        """Retorna (docs, projeto_urls→professores)."""
+        resultados: list[dict] = []
+        proj_urls: dict[str, set[str]] = {}
 
-    async def crawl_cursos(self, limit: int | None = None) -> list[dict]:
-        return await self._crawl_listed_section(
-            "curso", SECTION_URLS["cursos"], URL_PATTERNS["cursos"],
-            _extract_curso, limit,
-        )
-
-    async def crawl_disciplinas(self, limit: int | None = None) -> list[dict]:
-        return await self._crawl_listed_section(
-            "disciplina", SECTION_URLS["disciplinas"], URL_PATTERNS["disciplinas"],
-            _extract_disciplina, limit,
-        )
-
-    async def crawl_projetos(self, limit: int | None = None) -> list[dict]:
-        return await self._crawl_listed_section(
-            "projeto", SECTION_URLS["projetos"], URL_PATTERNS["projetos"],
-            _extract_projeto, limit,
-        )
-
-    async def crawl_servidores(self, limit: int | None = None) -> list[dict]:
-        return await self._crawl_listed_section(
-            "servidor", SECTION_URLS["servidores"], URL_PATTERNS["servidores"],
-            _extract_servidor, limit,
-        )
-
-    async def crawl_unidades(self, limit: int | None = None) -> list[dict]:
-        return await self._crawl_listed_section(
-            "unidade", SECTION_URLS["unidades"], URL_PATTERNS["unidades"],
-            _extract_unidade, limit,
-        )
-
-    async def crawl_gestao(self) -> list[dict]:
-        async with RateLimitedClient(1, 0.0) as client:
-            url  = SECTION_URLS["gestao"]
+        async def _one(url: str, cursos_rel: list[str]) -> None:
             soup = await client.fetch(url)
             if soup is None:
-                return []
+                return
             try:
-                return [_build_doc("gestao", _extract_gestao(soup, url))]
+                extracted = _extract_servidor(soup, url, cursos_rel)
             except Exception as exc:
-                log.error("[GESTAO] Erro: %s", exc)
-                return []
+                log.error("[PROFESSOR] Erro em %s: %s", url[:70], exc)
+                return
+            if extracted is None:      # situação inativa
+                return
+            resultados.append(extracted)
 
-    async def crawl_sobre(self) -> list[dict]:
-        async with RateLimitedClient(1, 0.0) as client:
-            url  = SECTION_URLS["sobre"]
-            soup = await client.fetch(url)
-            if soup is None:
-                return []
-            try:
-                return [_build_doc("sobre", _extract_sobre(soup, url))]
-            except Exception as exc:
-                log.error("[SOBRE] Erro: %s", exc)
-                return []
+        await asyncio.gather(*[
+            _one(url, sorted(cursos)) for url, cursos in sorted(prof_urls.items())
+        ])
 
-    async def crawl_all(
-        self,
-        cursos_max:      int | None = None,
-        disciplinas_max: int | None = None,
-        projetos_max:    int | None = None,
-        servidores_max:  int | None = None,
-        unidades_max:    int | None = None,
+        # Dedup por nome: o portal cria um registro por vínculo — mantém o
+        # registro ativo com currículo mais completo.
+        por_nome: dict[str, dict] = {}
+        for ext in resultados:
+            chave = ext["titulo"].lower()
+            atual = por_nome.get(chave)
+            if atual is None or len(ext["embedding_text"]) > len(atual["embedding_text"]):
+                por_nome[chave] = ext
+
+        docs: list[dict] = []
+        for ext in por_nome.values():
+            doc = _build_doc("servidor", ext)
+            docs.append(doc)
+            nome = doc["titulo"]
+            for proj in doc["dados_completos"].get("projetos_ativos", []):
+                if isinstance(proj, dict) and proj.get("url"):
+                    proj_urls.setdefault(proj["url"], set()).add(nome)
+
+        descartados = len(resultados) - len(por_nome)
+        if descartados:
+            log.info("[PROFESSORES] %d registro(s) duplicado(s) descartado(s).", descartados)
+        return docs, proj_urls
+
+    # ── Fase 4: projetos ────────────────────────────────────────────────────
+    async def _crawl_projetos(
+        self, client: RateLimitedClient, proj_urls: dict[str, set[str]],
     ) -> list[dict]:
-        """Coleta todas as seções em sequência, respeitando o rate limit."""
-        log.info("[Crawler] Coleta completa iniciada — %s", _now())
-        all_docs: list[dict] = []
+        docs: list[dict] = []
 
-        plan = [
-            ("cursos",      self.crawl_cursos(cursos_max)),
-            ("disciplinas", self.crawl_disciplinas(disciplinas_max)),
-            ("projetos",    self.crawl_projetos(projetos_max)),
-            ("servidores",  self.crawl_servidores(servidores_max)),
-            ("unidades",    self.crawl_unidades(unidades_max)),
-            ("gestao",      self.crawl_gestao()),
-            ("sobre",       self.crawl_sobre()),
-        ]
+        async def _one(url: str, profs_rel: list[str]) -> None:
+            soup = await client.fetch(url)
+            if soup is None:
+                return
+            try:
+                extracted = _extract_projeto(soup, url, profs_rel)
+            except Exception as exc:
+                log.error("[PROJETO] Erro em %s: %s", url[:70], exc)
+                return
+            if extracted is None:      # projeto não ativo
+                return
+            docs.append(_build_doc("projeto", extracted))
 
-        for tipo, coro in plan:
-            docs = await coro
-            all_docs.extend(docs)
-            log.info("[Resumo] %s: +%d docs (total=%d)", tipo, len(docs), len(all_docs))
+        await asyncio.gather(*[
+            _one(url, sorted(profs)) for url, profs in sorted(proj_urls.items())
+        ])
+        return docs
 
-        return all_docs
+    # ── Orquestração ────────────────────────────────────────────────────────
+    async def crawl(self) -> list[dict]:
+        """Executa as 4 fases do deep-crawl e retorna todos os documentos."""
+        log.info("[Crawler] Deep-crawl dos cursos de Computação — %s", _now())
+        log.info("[Crawler] Cursos alvo: %s",
+                 ", ".join(f"{c} ({TARGET_CURSOS[c]['nome']} — {TARGET_CURSOS[c]['grau']})"
+                           for c in self._cursos if c in TARGET_CURSOS))
+
+        async with RateLimitedClient(self._concurrency, self._delay) as client:
+            # Fase 1 — cursos
+            cursos_docs, disc_urls, prof_urls = await self._crawl_cursos(client)
+            log.info("[Fase 1] %d cursos | %d disciplinas únicas | %d professores únicos",
+                     len(cursos_docs), len(disc_urls), len(prof_urls))
+
+            # Fase 2 — disciplinas
+            disc_docs = await self._crawl_disciplinas(client, disc_urls)
+            log.info("[Fase 2] %d disciplinas capturadas", len(disc_docs))
+
+            # Fase 3 — professores (apenas situação ativa)
+            prof_docs, proj_urls = await self._crawl_professores(client, prof_urls)
+            log.info("[Fase 3] %d professores ativos | %d projetos ativos únicos",
+                     len(prof_docs), len(proj_urls))
+
+            # Fase 4 — projetos ativos
+            proj_docs = await self._crawl_projetos(client, proj_urls)
+            log.info("[Fase 4] %d projetos ativos capturados", len(proj_docs))
+
+            log.info("[HTTP] %s", client.stats)
+
+        return cursos_docs + disc_docs + prof_docs + proj_docs
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1293,73 +1377,30 @@ def save_json(docs: list[dict], output_path: str) -> None:
 
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="Crawler Async do Portal Institucional UFPel",
+        description="Deep-crawler dos cursos de Computação do Portal UFPel",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-
-    g = p.add_argument_group("Saída e performance")
-    g.add_argument("--output",           default=DEFAULT_OUTPUT, metavar="FILE",
+    p.add_argument("--output",      default=DEFAULT_OUTPUT, metavar="FILE",
                    help="Arquivo JSON de saída")
-    g.add_argument("--concurrency",      type=int, default=DEFAULT_CONCURRENCY, metavar="N",
-                   help="Requisições simultâneas por seção")
-    g.add_argument("--delay",            type=float, default=DEFAULT_DELAY, metavar="SECS",
+    p.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY, metavar="N",
+                   help="Requisições simultâneas")
+    p.add_argument("--delay",       type=float, default=DEFAULT_DELAY, metavar="SECS",
                    help="Delay (s) entre requests por worker")
-
-    g2 = p.add_argument_group("Seleção de seções")
-    g2.add_argument("--all-types",        action="store_true",
-                    help="Coleta todas as seções")
-    g2.add_argument("--cursos-only",      action="store_true")
-    g2.add_argument("--disciplinas-only", action="store_true")
-    g2.add_argument("--projetos-only",    action="store_true")
-    g2.add_argument("--servidores-only",  action="store_true")
-    g2.add_argument("--unidades-only",    action="store_true")
-    g2.add_argument("--gestao-only",      action="store_true")
-    g2.add_argument("--sobre-only",       action="store_true")
-
-    g3 = p.add_argument_group("Limites por seção (padrão: sem limite)")
-    g3.add_argument("--cursos-max",       type=int, default=None, metavar="N")
-    g3.add_argument("--disciplinas-max",  type=int, default=None, metavar="N")
-    g3.add_argument("--projetos-max",     type=int, default=None, metavar="N")
-    g3.add_argument("--servidores-max",   type=int, default=None, metavar="N")
-    g3.add_argument("--unidades-max",     type=int, default=None, metavar="N")
+    p.add_argument("--cursos",      nargs="+", default=None, metavar="COD",
+                   choices=list(TARGET_CURSOS.keys()),
+                   help="Subconjunto dos códigos de curso alvo "
+                        f"(padrão: todos — {' '.join(TARGET_CURSOS)})")
     return p
 
 
 async def _amain(args: argparse.Namespace) -> None:
-    crawler = UFPelCrawler(concurrency=args.concurrency, delay=args.delay)
+    crawler = UFPelCrawler(
+        concurrency=args.concurrency,
+        delay=args.delay,
+        cursos=args.cursos,
+    )
     t0   = datetime.now(timezone.utc)
-    docs: list[dict] = []
-
-    any_specific = any([
-        args.all_types, args.cursos_only, args.disciplinas_only,
-        args.projetos_only, args.servidores_only, args.unidades_only,
-        args.gestao_only, args.sobre_only,
-    ])
-
-    if not any_specific or args.all_types:
-        docs = await crawler.crawl_all(
-            cursos_max=args.cursos_max,
-            disciplinas_max=args.disciplinas_max,
-            projetos_max=args.projetos_max,
-            servidores_max=args.servidores_max,
-            unidades_max=args.unidades_max,
-        )
-    else:
-        if args.cursos_only:
-            docs += await crawler.crawl_cursos(args.cursos_max)
-        if args.disciplinas_only:
-            docs += await crawler.crawl_disciplinas(args.disciplinas_max)
-        if args.projetos_only:
-            docs += await crawler.crawl_projetos(args.projetos_max)
-        if args.servidores_only:
-            docs += await crawler.crawl_servidores(args.servidores_max)
-        if args.unidades_only:
-            docs += await crawler.crawl_unidades(args.unidades_max)
-        if args.gestao_only:
-            docs += await crawler.crawl_gestao()
-        if args.sobre_only:
-            docs += await crawler.crawl_sobre()
-
+    docs = await crawler.crawl()
     elapsed = (datetime.now(timezone.utc) - t0).total_seconds()
     log.info("[Crawler] Concluído em %.1fs — %d documentos.", elapsed, len(docs))
     save_json(docs, args.output)
